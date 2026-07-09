@@ -1,0 +1,53 @@
+cmake_minimum_required(VERSION 3.16)
+project(sapphire_ros2)
+
+# ament defaults to C++14, override to C++17
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
+
+# ── Dependencies ─────────────────────────────────────────────────
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_eigen REQUIRED)
+find_package(pcl_ros REQUIRED)
+find_package(PCL REQUIRED)
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+# Find sapphire core — add_subdirectory in colcon workspace, find_package otherwise
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/CMakeLists.txt")
+  message(STATUS "sapphire core found as sibling package, using add_subdirectory")
+  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../sapphire ${CMAKE_BINARY_DIR}/sapphire)
+else()
+  find_package(sapphire REQUIRED)
+  message(STATUS "sapphire core found via find_package")
+endif()
+
+# Node
+add_executable(sapphire_ros_node
+    src/main.cpp
+    src/sapphire_ros.cpp
+)
+target_include_directories(sapphire_ros_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(sapphire_ros_node
+    sapphire
+    ${PCL_LIBRARIES}
+)
+ament_target_dependencies(sapphire_ros_node
+    rclcpp sensor_msgs nav_msgs tf2 tf2_ros tf2_eigen pcl_ros
+)
+
+# Install
+install(TARGETS sapphire_ros_node DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+
+ament_package()
