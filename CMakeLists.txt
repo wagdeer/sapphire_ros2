@@ -12,6 +12,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
@@ -42,7 +43,7 @@ target_link_libraries(sapphire_ros_node
     ${PCL_LIBRARIES}
 )
 ament_target_dependencies(sapphire_ros_node
-    rclcpp sensor_msgs nav_msgs tf2 tf2_ros tf2_eigen pcl_ros
+    rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_eigen pcl_ros
 )
 
 # Install

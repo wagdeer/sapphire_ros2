@@ -10,6 +10,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -29,6 +30,21 @@ def generate_launch_description():
         default_value='/sapphire/odometry',
         description='Odometry output topic'
     )
+    acc_scale_arg = DeclareLaunchArgument(
+        'acc_scale',
+        default_value='9.80665',
+        description='Scale raw IMU acceleration to m/s^2 (Mid-360 outputs g)'
+    )
+    world_frame_arg = DeclareLaunchArgument(
+        'world_frame',
+        default_value='map',
+        description='World frame used by odometry, TF, and deskewed clouds'
+    )
+    lidar_frame_arg = DeclareLaunchArgument(
+        'lidar_frame',
+        default_value='lidar',
+        description='LiDAR child frame used by odometry and TF'
+    )
 
     # Node
     sapphire_node = Node(
@@ -36,6 +52,13 @@ def generate_launch_description():
         executable='sapphire_ros_node',
         name='sapphire_ros',
         output='screen',
+        parameters=[{
+            'acc_scale': ParameterValue(
+                LaunchConfiguration('acc_scale'), value_type=float
+            ),
+            'world_frame': LaunchConfiguration('world_frame'),
+            'lidar_frame': LaunchConfiguration('lidar_frame'),
+        }],
         remappings=[
             ('lidar/points', LaunchConfiguration('lidar_topic')),
             ('imu/data', LaunchConfiguration('imu_topic')),
@@ -47,5 +70,8 @@ def generate_launch_description():
         lidar_topic_arg,
         imu_topic_arg,
         odom_topic_arg,
+        acc_scale_arg,
+        world_frame_arg,
+        lidar_frame_arg,
         sapphire_node,
     ])
