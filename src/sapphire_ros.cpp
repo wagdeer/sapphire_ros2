@@ -227,7 +227,8 @@ void SapphireRos::lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr 
 
     const auto& result = pipeline_->latestResult();
     if (result.converged) {
-        publish_odometry(result);
+        const auto propagated = pipeline_->latestPropagatedResult();
+        publish_odometry(propagated.value_or(result));
         publish_deskewed(result.stamp);
     }
 }
@@ -245,6 +246,9 @@ void SapphireRos::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
                 msg->angular_velocity.z};
 
     pipeline_->pushImu(imu);
+    if (const auto propagated = pipeline_->latestPropagatedResult()) {
+        publish_odometry(*propagated);
+    }
 }
 
 void SapphireRos::publish_odometry(const sapphire::OdometryResult& result) {
