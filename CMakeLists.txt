@@ -9,6 +9,7 @@ endif()
 
 # ── Dependencies ─────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -43,12 +44,19 @@ target_link_libraries(sapphire_ros_node
     ${PCL_LIBRARIES}
 )
 ament_target_dependencies(sapphire_ros_node
-    rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_eigen pcl_ros
+    ament_index_cpp rclcpp sensor_msgs nav_msgs geometry_msgs
+    tf2 tf2_ros tf2_eigen pcl_ros
 )
 
 # Install
 install(TARGETS sapphire_ros_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/cfg")
+  install(
+      DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/cfg/
+      DESTINATION share/${PROJECT_NAME}/cfg
+  )
+endif()
 
 ament_package()

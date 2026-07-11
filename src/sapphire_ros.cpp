@@ -1,5 +1,7 @@
 #include <sapphire_ros2/sapphire_ros.hpp>
 
+#include <sapphire/config.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
@@ -21,6 +23,14 @@ SapphireRos::SapphireRos()
         throw std::invalid_argument(
             "acc_scale must be finite and greater than zero");
     }
+    const std::string default_config_file =
+        ament_index_cpp::get_package_share_directory("sapphire_ros2")
+        + "/cfg/sapphire_mid360.toml";
+    config_file_ = this->declare_parameter<std::string>(
+        "config_file", default_config_file);
+    if (config_file_.empty()) {
+        throw std::invalid_argument("config_file must not be empty");
+    }
     world_frame_ =
         this->declare_parameter<std::string>("world_frame", "map");
     lidar_frame_ =
@@ -30,7 +40,11 @@ SapphireRos::SapphireRos()
             "world_frame and lidar_frame must not be empty");
     }
 
-    sapphire::Config config;
+    const sapphire::Config config = sapphire::loadConfig(config_file_);
+    RCLCPP_INFO(
+        this->get_logger(),
+        "[sapphire_ros2] loaded algorithm config: %s",
+        config_file_.c_str());
     pipeline_ = std::make_unique<sapphire::OdometryPipeline>(config);
     tf_broadcaster_ =
         std::make_unique<tf2_ros::TransformBroadcaster>(*this);

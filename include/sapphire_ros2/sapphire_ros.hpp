@@ -39,6 +39,7 @@ private:
 
     // ── Core ─────────────────────────────────────────────────────
     double acc_scale_ = 1.0;  // raw acceleration unit → m/s²
+    std::string config_file_;
     std::string world_frame_ = "map";
     std::string lidar_frame_ = "lidar";
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
