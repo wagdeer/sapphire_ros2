@@ -2,12 +2,16 @@
 
 #include <sapphire/config.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -57,6 +61,9 @@ SapphireRos::SapphireRos()
 
     deskewed_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "sapphire/deskewed", reliable_qos);
+    diagnostics_pub_ =
+        this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+            "sapphire/diagnostics", reliable_qos);
 
     // Match DLIO's execution model: LiDAR may wait for scan-end IMU data,
     // therefore IMU callbacks must be able to run concurrently.
@@ -85,7 +92,10 @@ SapphireRos::SapphireRos()
 
     RCLCPP_INFO(this->get_logger(), "Sapphire ROS2 wrapper ready");
     RCLCPP_INFO(this->get_logger(), "  Subscribed: lidar/points, imu/data");
-    RCLCPP_INFO(this->get_logger(), "  Publishing: sapphire/odometry, sapphire/deskewed");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "  Publishing: sapphire/odometry, sapphire/deskewed, "
+        "sapphire/diagnostics");
     RCLCPP_INFO(this->get_logger(), "  IMU acceleration scale: %.6f", acc_scale_);
     RCLCPP_INFO(
         this->get_logger(), "  Frames: %s -> %s",
@@ -126,6 +136,25 @@ double normalizePointTimestamp(
 
     // Velodyne/Ouster "time" fields are commonly relative seconds.
     return raw;
+}
+
+template <typename T>
+diagnostic_msgs::msg::KeyValue diagnosticValue(
+    const std::string& key, const T& value)
+{
+    std::ostringstream stream;
+    stream << std::setprecision(8) << value;
+    diagnostic_msgs::msg::KeyValue output;
+    output.key = key;
+    output.value = stream.str();
+    return output;
+}
+
+std::string vectorString(const Eigen::Vector3d& value) {
+    std::ostringstream stream;
+    stream << std::setprecision(8)
+           << value.x() << "," << value.y() << "," << value.z();
+    return stream.str();
 }
 
 }  // namespace
@@ -225,7 +254,13 @@ void SapphireRos::lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr 
 
     pipeline_->pushLidar(stamp, cloud);
 
-    const auto& result = pipeline_->latestResult();
+    const auto result = pipeline_->latestResult();
+    if (last_lidar_result_stamp_.has_value()
+        && result.stamp == *last_lidar_result_stamp_) {
+        return;
+    }
+    last_lidar_result_stamp_ = result.stamp;
+    publish_diagnostics(result);
     if (result.converged) {
         const auto propagated = pipeline_->latestPropagatedResult();
         publish_odometry(propagated.value_or(result));
@@ -269,6 +304,12 @@ void SapphireRos::publish_odometry(const sapphire::OdometryResult& result) {
     msg.pose.pose.orientation.z = q.z();
     msg.pose.pose.orientation.w = q.w();
 
+    const Eigen::Vector3d velocity_lidar =
+        T.rotation().transpose() * result.v_world;
+    msg.twist.twist.linear.x = velocity_lidar.x();
+    msg.twist.twist.linear.y = velocity_lidar.y();
+    msg.twist.twist.linear.z = velocity_lidar.z();
+
     odom_pub_->publish(msg);
 
     geometry_msgs::msg::TransformStamped transform;
@@ -280,6 +321,49 @@ void SapphireRos::publish_odometry(const sapphire::OdometryResult& result) {
     transform.transform.translation.z = T.translation().z();
     transform.transform.rotation = msg.pose.pose.orientation;
     tf_broadcaster_->sendTransform(transform);
+}
+
+void SapphireRos::publish_diagnostics(
+    const sapphire::OdometryResult& result)
+{
+    diagnostic_msgs::msg::DiagnosticArray message;
+    message.header.stamp = rclcpp::Time(
+        static_cast<int64_t>(std::llround(result.stamp * 1e9)));
+
+    diagnostic_msgs::msg::DiagnosticStatus status;
+    status.name = "sapphire/odometry";
+    status.hardware_id = "sapphire";
+    status.level = result.converged
+        ? diagnostic_msgs::msg::DiagnosticStatus::OK
+        : diagnostic_msgs::msg::DiagnosticStatus::WARN;
+    status.message = result.diagnostics.registration_accepted
+        ? "GICP registration accepted"
+        : (result.converged
+            ? "odometry initialized"
+            : "GICP registration rejected");
+
+    const auto& diagnostics = result.diagnostics;
+    status.values = {
+        diagnosticValue("registration_accepted",
+                        diagnostics.registration_accepted),
+        diagnosticValue("registration_ms", diagnostics.registration_ms),
+        diagnosticValue("fitness_score", diagnostics.fitness_score),
+        diagnosticValue("num_inliers", diagnostics.num_inliers),
+        diagnosticValue("iterations", diagnostics.iterations),
+        diagnosticValue("source_points", diagnostics.source_points),
+        diagnosticValue("target_points", diagnostics.target_points),
+        diagnosticValue("keyframe_count", diagnostics.keyframe_count),
+        diagnosticValue(
+            "stored_keyframe_points",
+            diagnostics.stored_keyframe_points),
+        diagnosticValue("velocity_world_mps", vectorString(result.v_world)),
+        diagnosticValue(
+            "accel_bias_mps2", vectorString(diagnostics.accel_bias)),
+        diagnosticValue(
+            "gyro_bias_radps", vectorString(diagnostics.gyro_bias)),
+    };
+    message.status.push_back(std::move(status));
+    diagnostics_pub_->publish(message);
 }
 
 void SapphireRos::publish_deskewed(double stamp) {
