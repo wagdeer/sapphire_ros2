@@ -346,6 +346,20 @@ void SapphireRos::publish_diagnostics(
     status.values = {
         diagnosticValue("registration_accepted",
                         diagnostics.registration_accepted),
+        diagnosticValue(
+            "deskew_timeline_ms", diagnostics.deskew_timeline_ms),
+        diagnosticValue(
+            "deskew_integration_ms", diagnostics.deskew_integration_ms),
+        diagnosticValue(
+            "deskew_transform_ms", diagnostics.deskew_transform_ms),
+        diagnosticValue("deskew_total_ms", diagnostics.deskew_total_ms),
+        diagnosticValue(
+            "deskew_timestamp_groups",
+            diagnostics.deskew_timestamp_groups),
+        diagnosticValue(
+            "deskew_imu_intervals", diagnostics.deskew_imu_intervals),
+        diagnosticValue(
+            "deskew_pim_copies", diagnostics.deskew_pim_copies),
         diagnosticValue("registration_ms", diagnostics.registration_ms),
         diagnosticValue("fitness_score", diagnostics.fitness_score),
         diagnosticValue("num_inliers", diagnostics.num_inliers),
