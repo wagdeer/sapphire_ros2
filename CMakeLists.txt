@@ -15,6 +15,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
@@ -46,7 +47,7 @@ target_link_libraries(sapphire_ros_node
 )
 ament_target_dependencies(sapphire_ros_node
     ament_index_cpp rclcpp sensor_msgs nav_msgs diagnostic_msgs geometry_msgs
-    tf2 tf2_ros tf2_eigen pcl_ros
+    visualization_msgs tf2 tf2_ros tf2_eigen pcl_ros
 )
 
 # Install

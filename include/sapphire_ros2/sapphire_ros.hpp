@@ -5,6 +5,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <sapphire/odometry/pipeline.hpp>
@@ -29,12 +30,17 @@ private:
     void publish_odometry(const sapphire::OdometryResult& result);
     void publish_deskewed(double stamp);
     void publish_diagnostics(const sapphire::OdometryResult& result);
+    void publish_pgo_visualization();
 
     // ── Publishers ───────────────────────────────────────────────
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskewed_pub_;
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
         diagnostics_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pgo_map_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+        pgo_graph_pub_;
+    rclcpp::TimerBase::SharedPtr pgo_visualization_timer_;
 
     // ── Subscriptions ────────────────────────────────────────────
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;

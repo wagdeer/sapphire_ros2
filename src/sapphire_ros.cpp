@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -64,6 +65,19 @@ SapphireRos::SapphireRos()
     diagnostics_pub_ =
         this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
             "sapphire/diagnostics", reliable_qos);
+    if (config.pgo.enabled) {
+        auto visualization_qos =
+            rclcpp::QoS(1).reliable().transient_local();
+        pgo_map_pub_ =
+            this->create_publisher<sensor_msgs::msg::PointCloud2>(
+                "sapphire/pgo/map", visualization_qos);
+        pgo_graph_pub_ =
+            this->create_publisher<visualization_msgs::msg::MarkerArray>(
+                "sapphire/pgo/graph", visualization_qos);
+        pgo_visualization_timer_ = this->create_wall_timer(
+            std::chrono::seconds(1),
+            [this]() { publish_pgo_visualization(); });
+    }
 
     // Match DLIO's execution model: LiDAR may wait for scan-end IMU data,
     // therefore IMU callbacks must be able to run concurrently.
@@ -96,6 +110,12 @@ SapphireRos::SapphireRos()
         this->get_logger(),
         "  Publishing: sapphire/odometry, sapphire/deskewed, "
         "sapphire/diagnostics");
+    if (config.pgo.enabled) {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "  PGO visualization: sapphire/pgo/map, sapphire/pgo/graph "
+            "(subscriber-driven)");
+    }
     RCLCPP_INFO(this->get_logger(), "  IMU acceleration scale: %.6f", acc_scale_);
     RCLCPP_INFO(
         this->get_logger(), "  Frames: %s -> %s",
@@ -343,6 +363,7 @@ void SapphireRos::publish_diagnostics(
             : "GICP registration rejected");
 
     const auto& diagnostics = result.diagnostics;
+    const sapphire::PoseGraphStats pose_graph = pipeline_->poseGraphStats();
     status.values = {
         diagnosticValue("registration_accepted",
                         diagnostics.registration_accepted),
@@ -375,9 +396,131 @@ void SapphireRos::publish_diagnostics(
             "accel_bias_mps2", vectorString(diagnostics.accel_bias)),
         diagnosticValue(
             "gyro_bias_radps", vectorString(diagnostics.gyro_bias)),
+        diagnosticValue("pgo_keyframes", pose_graph.keyframes),
+        diagnosticValue("pgo_optimized_poses", pose_graph.optimized_poses),
+        diagnosticValue(
+            "pgo_loop_candidates", pose_graph.loop_candidates),
+        diagnosticValue(
+            "pgo_loop_registration_failures",
+            pose_graph.loop_registration_failures),
+        diagnosticValue("pgo_loop_edges", pose_graph.loop_edges),
+        diagnosticValue(
+            "pgo_last_loop_fitness", pose_graph.last_loop_fitness),
+        diagnosticValue(
+            "pgo_correction_translation_m",
+            pose_graph.correction_translation),
+        diagnosticValue(
+            "pgo_correction_rotation_rad",
+            pose_graph.correction_rotation),
+        diagnosticValue("pgo_revision", pose_graph.revision),
     };
     message.status.push_back(std::move(status));
     diagnostics_pub_->publish(message);
+}
+
+void SapphireRos::publish_pgo_visualization() {
+    const rclcpp::Time stamp = this->now();
+
+    if (pgo_graph_pub_->get_subscription_count() > 0) {
+        const sapphire::PoseGraphSnapshot snapshot =
+            pipeline_->poseGraphSnapshot();
+        if (!snapshot.optimized_poses.empty()) {
+            visualization_msgs::msg::Marker odometry_edges;
+            odometry_edges.header.stamp = stamp;
+            odometry_edges.header.frame_id = world_frame_;
+            odometry_edges.ns = "odometry_edges";
+            odometry_edges.id = 0;
+            odometry_edges.type =
+                visualization_msgs::msg::Marker::LINE_LIST;
+            odometry_edges.action =
+                visualization_msgs::msg::Marker::ADD;
+            odometry_edges.pose.orientation.w = 1.0;
+            odometry_edges.scale.x = 0.05;
+            odometry_edges.color.r = 0.1f;
+            odometry_edges.color.g = 0.8f;
+            odometry_edges.color.b = 0.2f;
+            odometry_edges.color.a = 1.0f;
+            odometry_edges.points.reserve(
+                (snapshot.optimized_poses.size() - 1) * 2);
+
+            auto graphPoint = [](const sapphire::Isometry3d& pose) {
+                geometry_msgs::msg::Point point;
+                point.x = pose.translation().x();
+                point.y = pose.translation().y();
+                point.z = pose.translation().z();
+                return point;
+            };
+            for (size_t i = 1; i < snapshot.optimized_poses.size(); ++i) {
+                odometry_edges.points.push_back(
+                    graphPoint(snapshot.optimized_poses[i - 1]));
+                odometry_edges.points.push_back(
+                    graphPoint(snapshot.optimized_poses[i]));
+            }
+
+            visualization_msgs::msg::Marker loop_edges;
+            loop_edges.header = odometry_edges.header;
+            loop_edges.ns = "loop_edges";
+            loop_edges.id = 0;
+            loop_edges.type = visualization_msgs::msg::Marker::LINE_LIST;
+            loop_edges.action = visualization_msgs::msg::Marker::ADD;
+            loop_edges.pose.orientation.w = 1.0;
+            loop_edges.scale.x = 0.12;
+            loop_edges.color.r = 1.0f;
+            loop_edges.color.g = 0.1f;
+            loop_edges.color.b = 0.1f;
+            loop_edges.color.a = 1.0f;
+            loop_edges.points.reserve(snapshot.loop_edges.size() * 2);
+            for (const sapphire::PoseGraphEdge& edge : snapshot.loop_edges) {
+                if (edge.source >= snapshot.optimized_poses.size()
+                    || edge.target >= snapshot.optimized_poses.size()) {
+                    continue;
+                }
+                loop_edges.points.push_back(
+                    graphPoint(snapshot.optimized_poses[edge.source]));
+                loop_edges.points.push_back(
+                    graphPoint(snapshot.optimized_poses[edge.target]));
+            }
+
+            visualization_msgs::msg::Marker nodes;
+            nodes.header = odometry_edges.header;
+            nodes.ns = "nodes";
+            nodes.id = 0;
+            nodes.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+            nodes.action = visualization_msgs::msg::Marker::ADD;
+            nodes.pose.orientation.w = 1.0;
+            nodes.scale.x = 0.15;
+            nodes.scale.y = 0.15;
+            nodes.scale.z = 0.15;
+            nodes.color.r = 0.1f;
+            nodes.color.g = 0.4f;
+            nodes.color.b = 1.0f;
+            nodes.color.a = 1.0f;
+            nodes.points.reserve(snapshot.optimized_poses.size());
+            for (const sapphire::Isometry3d& pose :
+                 snapshot.optimized_poses) {
+                nodes.points.push_back(graphPoint(pose));
+            }
+
+            visualization_msgs::msg::MarkerArray graph;
+            graph.markers.push_back(std::move(odometry_edges));
+            graph.markers.push_back(std::move(loop_edges));
+            graph.markers.push_back(std::move(nodes));
+            pgo_graph_pub_->publish(graph);
+        }
+    }
+
+    if (pgo_map_pub_->get_subscription_count() > 0) {
+        pipeline_->requestPoseGraphMap();
+        const sapphire::PointCloudConstPtr map =
+            pipeline_->latestPoseGraphMap();
+        if (map && !map->empty()) {
+            sensor_msgs::msg::PointCloud2 message;
+            pcl::toROSMsg(*map, message);
+            message.header.stamp = stamp;
+            message.header.frame_id = world_frame_;
+            pgo_map_pub_->publish(message);
+        }
+    }
 }
 
 void SapphireRos::publish_deskewed(double stamp) {
