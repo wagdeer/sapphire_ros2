@@ -363,10 +363,10 @@ void SapphireRos::publish_diagnostics(
         ? diagnostic_msgs::msg::DiagnosticStatus::OK
         : diagnostic_msgs::msg::DiagnosticStatus::WARN;
     status.message = result.diagnostics.registration_accepted
-        ? "GICP registration accepted"
+        ? "scan registration accepted"
         : (result.converged
             ? "odometry initialized"
-            : "GICP registration rejected");
+            : "scan registration rejected");
 
     const auto& diagnostics = result.diagnostics;
     const sapphire::PoseGraphStats pose_graph = pipeline_->poseGraphStats();
