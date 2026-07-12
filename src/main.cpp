@@ -3,9 +3,11 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sapphire_ros2/sapphire_ros.hpp>
+#include <spdlog/spdlog.h>
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
+    spdlog::set_level(spdlog::level::warn);
     auto node = std::make_shared<sapphire_ros2::SapphireRos>();
     rclcpp::executors::MultiThreadedExecutor executor(
         rclcpp::ExecutorOptions{}, 2);

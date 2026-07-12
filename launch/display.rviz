@@ -7,9 +7,10 @@ Panels:
         - /Global Options1
         - /Status1
         - /Odometry1
-        - /Odometry1/Status1
         - /PointCloud21
         - /PointCloud21/Status1
+        - /PointCloud21/Topic1
+        - /PGO Graph1
       Splitter Ratio: 0.5
     Tree Height: 1776
   - Class: rviz_common/Selection
@@ -101,25 +102,25 @@ Visualization Manager:
       Class: rviz_default_plugins/PointCloud2
       Color: 255; 255; 255
       Color Transformer: Intensity
-      Decay Time: 10
+      Decay Time: 3
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 154
+      Max Intensity: 255
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: PointCloud2
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.009999999776482582
+      Size (m): 0.10000000149011612
       Style: Flat Squares
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        Filter size: 10
+        Filter size: 3
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /sapphire/deskewed
       Use Fixed Frame: true
       Use rainbow: true
@@ -184,25 +185,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 267.196533203125
+      Distance: 458.82391357421875
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -31.890356063842773
-        Y: 43.419551849365234
-        Z: -18.44895362854004
+        X: -60.7041015625
+        Y: 181.7593994140625
+        Z: 57.53577423095703
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.0347962379455566
+      Pitch: 1.544796347618103
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 5.211767673492432
+      Yaw: 0.04677152633666992
     Saved: ~
 Window Geometry:
   Displays:
@@ -220,5 +221,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 3828
-  X: 0
-  Y: 0
+  X: -32
+  Y: -32

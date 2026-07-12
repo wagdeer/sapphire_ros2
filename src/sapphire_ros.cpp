@@ -55,13 +55,15 @@ SapphireRos::SapphireRos()
         std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     auto sensor_qos = rclcpp::SensorDataQoS();
+    auto deskewed_qos = rclcpp::SensorDataQoS();
+    deskewed_qos.keep_last(1);
     auto reliable_qos = rclcpp::QoS(10).reliable();
 
     odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(
         "sapphire/odometry", reliable_qos);
 
     deskewed_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "sapphire/deskewed", reliable_qos);
+        "sapphire/deskewed", deskewed_qos);
     diagnostics_pub_ =
         this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
             "sapphire/diagnostics", reliable_qos);
@@ -346,6 +348,10 @@ void SapphireRos::publish_odometry(const sapphire::OdometryResult& result) {
 void SapphireRos::publish_diagnostics(
     const sapphire::OdometryResult& result)
 {
+    if (diagnostics_pub_->get_subscription_count() == 0) {
+        return;
+    }
+
     diagnostic_msgs::msg::DiagnosticArray message;
     message.header.stamp = rclcpp::Time(
         static_cast<int64_t>(std::llround(result.stamp * 1e9)));
@@ -367,6 +373,10 @@ void SapphireRos::publish_diagnostics(
     status.values = {
         diagnosticValue("registration_accepted",
                         diagnostics.registration_accepted),
+        diagnosticValue("preprocess_ms", diagnostics.preprocess_ms),
+        diagnosticValue("downsample_ms", diagnostics.downsample_ms),
+        diagnosticValue(
+            "submap_rebuild_ms", diagnostics.submap_rebuild_ms),
         diagnosticValue(
             "deskew_timeline_ms", diagnostics.deskew_timeline_ms),
         diagnosticValue(
@@ -422,6 +432,7 @@ void SapphireRos::publish_pgo_visualization() {
     const rclcpp::Time stamp = this->now();
 
     if (pgo_graph_pub_->get_subscription_count() > 0) {
+        pipeline_->requestPoseGraphSnapshot();
         const sapphire::PoseGraphSnapshot snapshot =
             pipeline_->poseGraphSnapshot();
         if (!snapshot.optimized_poses.empty()) {
