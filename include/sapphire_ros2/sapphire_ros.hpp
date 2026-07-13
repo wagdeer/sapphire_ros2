@@ -12,6 +12,7 @@
 
 #include <sapphire/odometry/pipeline.hpp>
 #include <sapphire/projection/depth_image.hpp>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +26,11 @@ public:
     SapphireRos();
 
 private:
+    struct DepthHistoryFrame {
+        sapphire::projection::DepthProjectionFrame projection;
+        double stamp = 0.0;
+    };
+
     // ── Callbacks ─────────────────────────────────────────────────
     void lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg);
@@ -68,11 +74,17 @@ private:
     std::string virtual_camera_frame_ = "virtual_camera_optical_frame";
     bool virtual_depth_enabled_ = true;
     bool depth_debug_enabled_ = false;
+    std::string depth_debug_color_mode_ = "log";
+    double depth_debug_max_depth_ = 30.0;
     std::string depth_orientation_mode_ = "startup_calibrated";
     double depth_yaw_offset_rad_ = 0.0;
+    int depth_history_frame_count_ = 3;
+    int depth_history_stride_ = 2;
+    double depth_history_max_age_sec_ = 0.75;
     sapphire::projection::DepthImageConfig depth_config_;
     sapphire::Isometry3d T_imu_lidar_ = sapphire::Isometry3d::Identity();
     std::optional<Eigen::Matrix3d> R_lidar_virtual_;
+    std::deque<DepthHistoryFrame> depth_history_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::unique_ptr<sapphire::OdometryPipeline> pipeline_;
     std::optional<double> last_lidar_result_stamp_;

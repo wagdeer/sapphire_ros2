@@ -86,7 +86,7 @@ def generate_launch_description():
     )
     virtual_depth_hole_fill_radius_arg = DeclareLaunchArgument(
         'virtual_depth_hole_fill_radius', default_value='2',
-        description='Local nearest-neighbour hole fill radius in pixels'
+        description='Normalized inverse-depth convolution radius in pixels'
     )
     virtual_depth_far_fill_arg = DeclareLaunchArgument(
         'virtual_depth_far_fill_depth', default_value='100.0',
@@ -95,6 +95,16 @@ def generate_launch_description():
     virtual_depth_debug_arg = DeclareLaunchArgument(
         'virtual_depth_publish_debug', default_value='false',
         description='Publish a BGR8 pseudo-colour depth debug image'
+    )
+    virtual_depth_debug_color_mode_arg = DeclareLaunchArgument(
+        'virtual_depth_debug_color_mode',
+        default_value='log',
+        description='Debug color scaling: linear, log, or inverse'
+    )
+    virtual_depth_debug_max_depth_arg = DeclareLaunchArgument(
+        'virtual_depth_debug_max_depth',
+        default_value='30.0',
+        description='Maximum depth represented by the debug color scale'
     )
     virtual_depth_frame_arg = DeclareLaunchArgument(
         'virtual_depth_frame_id',
@@ -110,6 +120,21 @@ def generate_launch_description():
         'virtual_depth_yaw_offset_deg',
         default_value='0.0',
         description='Additional virtual forward yaw offset in degrees'
+    )
+    virtual_depth_history_frames_arg = DeclareLaunchArgument(
+        'virtual_depth_history_frame_count',
+        default_value='5',
+        description='Number of registered historical scans used for hole fill'
+    )
+    virtual_depth_history_stride_arg = DeclareLaunchArgument(
+        'virtual_depth_history_stride',
+        default_value='5',
+        description='Select every Nth accepted historical scan'
+    )
+    virtual_depth_history_max_age_arg = DeclareLaunchArgument(
+        'virtual_depth_history_max_age_sec',
+        default_value='1.5',
+        description='Maximum age of a historical scan in seconds'
     )
 
     # Node
@@ -162,12 +187,30 @@ def generate_launch_description():
                 LaunchConfiguration('virtual_depth_publish_debug'),
                 value_type=bool
             ),
+            'virtual_depth.debug_color_mode':
+                LaunchConfiguration('virtual_depth_debug_color_mode'),
+            'virtual_depth.debug_max_depth': ParameterValue(
+                LaunchConfiguration('virtual_depth_debug_max_depth'),
+                value_type=float
+            ),
             'virtual_depth.frame_id':
                 LaunchConfiguration('virtual_depth_frame_id'),
             'virtual_depth.orientation_mode':
                 LaunchConfiguration('virtual_depth_orientation_mode'),
             'virtual_depth.yaw_offset_deg': ParameterValue(
                 LaunchConfiguration('virtual_depth_yaw_offset_deg'),
+                value_type=float
+            ),
+            'virtual_depth.history_frame_count': ParameterValue(
+                LaunchConfiguration('virtual_depth_history_frame_count'),
+                value_type=int
+            ),
+            'virtual_depth.history_stride': ParameterValue(
+                LaunchConfiguration('virtual_depth_history_stride'),
+                value_type=int
+            ),
+            'virtual_depth.history_max_age_sec': ParameterValue(
+                LaunchConfiguration('virtual_depth_history_max_age_sec'),
                 value_type=float
             ),
         }],
@@ -196,8 +239,13 @@ def generate_launch_description():
         virtual_depth_hole_fill_radius_arg,
         virtual_depth_far_fill_arg,
         virtual_depth_debug_arg,
+        virtual_depth_debug_color_mode_arg,
+        virtual_depth_debug_max_depth_arg,
         virtual_depth_frame_arg,
         virtual_depth_orientation_arg,
         virtual_depth_yaw_offset_arg,
+        virtual_depth_history_frames_arg,
+        virtual_depth_history_stride_arg,
+        virtual_depth_history_max_age_arg,
         sapphire_node,
     ])

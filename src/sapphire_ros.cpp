@@ -10,6 +10,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/image_encodings.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -51,6 +52,10 @@ SapphireRos::SapphireRos()
         this->declare_parameter<bool>("virtual_depth.enabled", true);
     depth_debug_enabled_ =
         this->declare_parameter<bool>("virtual_depth.publish_debug", false);
+    depth_debug_color_mode_ = this->declare_parameter<std::string>(
+        "virtual_depth.debug_color_mode", "log");
+    depth_debug_max_depth_ = this->declare_parameter<double>(
+        "virtual_depth.debug_max_depth", 30.0);
     virtual_camera_frame_ = this->declare_parameter<std::string>(
         "virtual_depth.frame_id", "virtual_camera_optical_frame");
     depth_orientation_mode_ = this->declare_parameter<std::string>(
@@ -59,6 +64,12 @@ SapphireRos::SapphireRos()
         "virtual_depth.yaw_offset_deg", 0.0);
     depth_yaw_offset_rad_ =
         depth_yaw_offset_deg * 3.14159265358979323846 / 180.0;
+    depth_history_frame_count_ = this->declare_parameter<int>(
+        "virtual_depth.history_frame_count", 3);
+    depth_history_stride_ = this->declare_parameter<int>(
+        "virtual_depth.history_stride", 2);
+    depth_history_max_age_sec_ = this->declare_parameter<double>(
+        "virtual_depth.history_max_age_sec", 0.75);
     depth_config_.width =
         this->declare_parameter<int>("virtual_depth.width", 640);
     depth_config_.height =
@@ -87,6 +98,26 @@ SapphireRos::SapphireRos()
     if (!std::isfinite(depth_yaw_offset_rad_)) {
         throw std::invalid_argument(
             "virtual_depth.yaw_offset_deg must be finite");
+    }
+    if (depth_debug_color_mode_ != "linear"
+        && depth_debug_color_mode_ != "log"
+        && depth_debug_color_mode_ != "inverse") {
+        throw std::invalid_argument(
+            "virtual_depth.debug_color_mode must be 'linear', 'log', "
+            "or 'inverse'");
+    }
+    if (!std::isfinite(depth_debug_max_depth_)
+        || depth_debug_max_depth_ <= depth_config_.near_depth) {
+        throw std::invalid_argument(
+            "virtual_depth.debug_max_depth must exceed near_depth");
+    }
+    if (depth_history_frame_count_ < 0
+        || depth_history_stride_ <= 0
+        || !std::isfinite(depth_history_max_age_sec_)
+        || depth_history_max_age_sec_ <= 0.0) {
+        throw std::invalid_argument(
+            "virtual depth history requires frame_count >= 0, stride > 0, "
+            "and finite max_age_sec > 0");
     }
     if (virtual_depth_enabled_) {
         (void)sapphire::projection::makeDepthCameraModel(depth_config_);
@@ -156,6 +187,19 @@ SapphireRos::SapphireRos()
             "  Virtual depth orientation: %s, yaw offset=%.1f deg",
             depth_orientation_mode_.c_str(),
             depth_yaw_offset_deg);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "  Virtual depth history: frames=%d, stride=%d, max age=%.2fs",
+            depth_history_frame_count_,
+            depth_history_stride_,
+            depth_history_max_age_sec_);
+        if (depth_debug_enabled_) {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "  Virtual depth debug colors: %s, max depth=%.1fm",
+                depth_debug_color_mode_.c_str(),
+                depth_debug_max_depth_);
+        }
     }
 
     // Match DLIO's execution model: LiDAR may wait for scan-end IMU data,
@@ -631,8 +675,12 @@ void SapphireRos::publish_deskewed(double stamp) {
 sapphire::Isometry3d SapphireRos::virtual_depth_pose(
     const sapphire::DeskewFrameSnapshot& snapshot)
 {
+    const sapphire::Isometry3d& T_world_lidar =
+        snapshot.registration_available
+        ? snapshot.T_world_lidar
+        : snapshot.T_world_lidar_ref;
     if (depth_orientation_mode_ == "lidar") {
-        return snapshot.T_world_lidar_ref;
+        return T_world_lidar;
     }
 
     if (!R_lidar_virtual_) {
@@ -650,11 +698,11 @@ sapphire::Isometry3d SapphireRos::virtual_depth_pose(
 
     sapphire::Isometry3d T_world_virtual = sapphire::Isometry3d::Identity();
     T_world_virtual.linear() =
-        snapshot.T_world_lidar_ref.rotation() * *R_lidar_virtual_;
+        T_world_lidar.rotation() * *R_lidar_virtual_;
     // Keep the virtual camera at the LiDAR optical centre; the IMU-to-LiDAR
     // translation must not shift the range origin.
     T_world_virtual.translation() =
-        snapshot.T_world_lidar_ref.translation();
+        T_world_lidar.translation();
     return T_world_virtual;
 }
 
@@ -673,7 +721,9 @@ void SapphireRos::publish_virtual_depth() {
     }
 
     const auto snapshot = pipeline_->latestFullDeskewFrame();
-    if (!snapshot || !snapshot->cloud || snapshot->cloud->empty()
+    if (!snapshot
+        || !snapshot->cloud_lidar_ref
+        || snapshot->cloud_lidar_ref->empty()
         || (last_virtual_depth_stamp_
             && snapshot->reference_stamp == *last_virtual_depth_stamp_)) {
         return;
@@ -681,10 +731,48 @@ void SapphireRos::publish_virtual_depth() {
 
     sapphire::projection::DepthImageResult projected;
     sapphire::Isometry3d T_world_virtual;
+    const sapphire::Isometry3d& T_world_lidar =
+        snapshot->registration_available
+        ? snapshot->T_world_lidar
+        : snapshot->T_world_lidar_ref;
+    std::vector<sapphire::projection::DepthProjectionFrame>
+        selected_history;
     try {
         T_world_virtual = virtual_depth_pose(*snapshot);
-        projected = sapphire::projection::createDepthImage(
-            *snapshot->cloud, T_world_virtual, depth_config_);
+        if (!depth_history_.empty()
+            && snapshot->reference_stamp <= depth_history_.back().stamp) {
+            depth_history_.clear();
+        }
+        while (!depth_history_.empty()
+               && snapshot->reference_stamp - depth_history_.front().stamp
+                    > depth_history_max_age_sec_) {
+            depth_history_.pop_front();
+        }
+
+        int prior_index = 1;
+        for (auto it = depth_history_.rbegin();
+             it != depth_history_.rend()
+                 && static_cast<int>(selected_history.size())
+                    < depth_history_frame_count_;
+             ++it, ++prior_index) {
+            const double age = snapshot->reference_stamp - it->stamp;
+            if (age < 0.0 || age > depth_history_max_age_sec_) {
+                continue;
+            }
+            if (prior_index % depth_history_stride_ == 0) {
+                selected_history.push_back(it->projection);
+            }
+        }
+
+        sapphire::projection::DepthProjectionFrame current_frame;
+        current_frame.cloud = snapshot->cloud_lidar_ref;
+        current_frame.T_world_frame = T_world_lidar;
+        projected =
+            sapphire::projection::createAccumulatedDepthImage(
+                current_frame,
+                selected_history,
+                T_world_virtual,
+                depth_config_);
     } catch (const std::exception& error) {
         RCLCPP_ERROR(
             this->get_logger(),
@@ -693,6 +781,20 @@ void SapphireRos::publish_virtual_depth() {
         return;
     }
     last_virtual_depth_stamp_ = snapshot->reference_stamp;
+    if (depth_history_frame_count_ > 0
+        && snapshot->registration_available
+        && snapshot->registration_accepted) {
+        DepthHistoryFrame history;
+        history.projection.cloud = snapshot->cloud_lidar_ref;
+        history.projection.T_world_frame = snapshot->T_world_lidar;
+        history.stamp = snapshot->reference_stamp;
+        depth_history_.push_back(std::move(history));
+        const std::size_t max_stored = static_cast<std::size_t>(
+            depth_history_frame_count_ * depth_history_stride_ + 1);
+        while (depth_history_.size() > max_stored) {
+            depth_history_.pop_front();
+        }
+    }
 
     std_msgs::msg::Header header;
     header.stamp = rclcpp::Time(static_cast<int64_t>(
@@ -708,7 +810,7 @@ void SapphireRos::publish_virtual_depth() {
         -1.0,  0.0, 0.0,
          0.0, -1.0, 0.0;
     const Eigen::Matrix3d R_lidar_virtual =
-        snapshot->T_world_lidar_ref.rotation().transpose()
+        T_world_lidar.rotation().transpose()
         * T_world_virtual.rotation();
     const Eigen::Quaterniond q_lidar_optical(
         R_lidar_virtual * R_virtual_optical);
@@ -760,16 +862,67 @@ void SapphireRos::publish_virtual_depth() {
     }
     if (depth_debug_pub_
         && depth_debug_pub_->get_subscription_count() > 0) {
-        cv::Mat normalized;
-        const double range =
-            depth_config_.far_depth - depth_config_.near_depth;
-        projected.depth.convertTo(
-            normalized,
+        cv::Mat normalized(
+            projected.depth.rows,
+            projected.depth.cols,
             CV_8UC1,
-            -255.0 / range,
-            255.0 * depth_config_.far_depth / range);
+            cv::Scalar(0));
+        const double near_depth = depth_config_.near_depth;
+        const double max_depth =
+            std::min(depth_debug_max_depth_, depth_config_.far_depth);
+        for (int v = 0; v < projected.depth.rows; ++v) {
+            for (int u = 0; u < projected.depth.cols; ++u) {
+                if (projected.confidence.at<unsigned char>(v, u)
+                    == sapphire::projection::kConfidenceFarFill) {
+                    continue;
+                }
+                const double depth = std::clamp(
+                    static_cast<double>(projected.depth.at<float>(v, u)),
+                    near_depth,
+                    max_depth);
+                double value = 0.0;
+                if (depth_debug_color_mode_ == "log") {
+                    value = (std::log(max_depth) - std::log(depth))
+                        / (std::log(max_depth) - std::log(near_depth));
+                } else if (depth_debug_color_mode_ == "inverse") {
+                    value = (1.0 / depth - 1.0 / max_depth)
+                        / (1.0 / near_depth - 1.0 / max_depth);
+                } else {
+                    value = (max_depth - depth)
+                        / (max_depth - near_depth);
+                }
+                normalized.at<unsigned char>(v, u) =
+                    cv::saturate_cast<unsigned char>(255.0 * value);
+            }
+        }
         cv::Mat color;
         cv::applyColorMap(normalized, color, cv::COLORMAP_TURBO);
+        for (int v = 0; v < color.rows; ++v) {
+            for (int u = 0; u < color.cols; ++u) {
+                const unsigned char confidence =
+                    projected.confidence.at<unsigned char>(v, u);
+                cv::Vec3b& pixel = color.at<cv::Vec3b>(v, u);
+                if (confidence
+                    == sapphire::projection::kConfidenceFarFill) {
+                    pixel = cv::Vec3b(0, 0, 0);
+                    continue;
+                }
+                const float brightness =
+                    confidence
+                        == sapphire::projection::kConfidenceMeasured
+                    ? 1.0f
+                    : (confidence
+                            == sapphire::projection::kConfidenceHistory
+                        ? 0.85f
+                        : 0.65f);
+                pixel[0] = cv::saturate_cast<unsigned char>(
+                    brightness * pixel[0]);
+                pixel[1] = cv::saturate_cast<unsigned char>(
+                    brightness * pixel[1]);
+                pixel[2] = cv::saturate_cast<unsigned char>(
+                    brightness * pixel[2]);
+            }
+        }
         depth_debug_pub_->publish(*cv_bridge::CvImage(
             header,
             sensor_msgs::image_encodings::BGR8,
@@ -778,9 +931,12 @@ void SapphireRos::publish_virtual_depth() {
 
     RCLCPP_DEBUG(
         this->get_logger(),
-        "Virtual depth coverage raw=%.3f local=%.3f",
+        "Virtual depth coverage raw=%.3f history=%.3f local=%.3f "
+        "(history frames=%zu)",
         projected.raw_coverage,
-        projected.local_fill_coverage);
+        projected.history_coverage,
+        projected.local_fill_coverage,
+        selected_history.size());
 }
 
 }  // namespace sapphire_ros2
