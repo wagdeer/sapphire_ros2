@@ -50,6 +50,8 @@ SapphireRos::SapphireRos()
     }
     virtual_depth_enabled_ =
         this->declare_parameter<bool>("virtual_depth.enabled", true);
+    depth_projection_model_ = this->declare_parameter<std::string>(
+        "virtual_depth.projection_model", "pinhole");
     depth_debug_enabled_ =
         this->declare_parameter<bool>("virtual_depth.publish_debug", false);
     depth_debug_color_mode_ = this->declare_parameter<std::string>(
@@ -88,6 +90,18 @@ SapphireRos::SapphireRos()
         this->declare_parameter<double>("virtual_depth.far_fill_depth", 100.0));
     if (virtual_camera_frame_.empty()) {
         throw std::invalid_argument("virtual_depth.frame_id must not be empty");
+    }
+    if (depth_projection_model_ == "panorama"
+        || depth_projection_model_ == "equirectangular") {
+        depth_config_.projection_model =
+            sapphire::projection::DepthProjectionModel::Equirectangular;
+    } else if (depth_projection_model_ == "pinhole") {
+        depth_config_.projection_model =
+            sapphire::projection::DepthProjectionModel::Pinhole;
+    } else {
+        throw std::invalid_argument(
+            "virtual_depth.projection_model must be 'pinhole' or "
+            "'panorama'");
     }
     if (depth_orientation_mode_ != "lidar"
         && depth_orientation_mode_ != "startup_calibrated") {
@@ -182,6 +196,15 @@ SapphireRos::SapphireRos()
             depth_config_.horizontal_fov_deg,
             depth_config_.vertical_fov_deg,
             virtual_camera_frame_.c_str());
+        RCLCPP_INFO(
+            this->get_logger(),
+            "  Virtual depth projection: %s%s",
+            depth_projection_model_.c_str(),
+            depth_config_.projection_model
+                    == sapphire::projection::DepthProjectionModel::
+                        Equirectangular
+                ? " (360x180 deg, radial range)"
+                : " (optical Z-depth)");
         RCLCPP_INFO(
             this->get_logger(),
             "  Virtual depth orientation: %s, yaw offset=%.1f deg",
@@ -841,23 +864,49 @@ void SapphireRos::publish_virtual_depth() {
         camera_info.header = header;
         camera_info.width = static_cast<uint32_t>(depth_config_.width);
         camera_info.height = static_cast<uint32_t>(depth_config_.height);
-        camera_info.distortion_model = "plumb_bob";
-        camera_info.d.assign(5, 0.0);
-        camera_info.k = {
-            projected.camera.fx, 0.0, projected.camera.cx,
-            0.0, projected.camera.fy, projected.camera.cy,
-            0.0, 0.0, 1.0,
-        };
         camera_info.r = {
             1.0, 0.0, 0.0,
             0.0, 1.0, 0.0,
             0.0, 0.0, 1.0,
         };
-        camera_info.p = {
-            projected.camera.fx, 0.0, projected.camera.cx, 0.0,
-            0.0, projected.camera.fy, projected.camera.cy, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-        };
+        if (depth_config_.projection_model
+            == sapphire::projection::DepthProjectionModel::
+                Equirectangular) {
+            camera_info.distortion_model = "spherical_equirectangular";
+            const double angular_fx =
+                static_cast<double>(depth_config_.width)
+                / (2.0 * 3.14159265358979323846);
+            const double angular_fy =
+                static_cast<double>(depth_config_.height)
+                / 3.14159265358979323846;
+            const double angular_cx =
+                static_cast<double>(depth_config_.width) * 0.5;
+            const double angular_cy =
+                static_cast<double>(depth_config_.height) * 0.5;
+            camera_info.k = {
+                angular_fx, 0.0, angular_cx,
+                0.0, angular_fy, angular_cy,
+                0.0, 0.0, 1.0,
+            };
+            camera_info.p = {
+                angular_fx, 0.0, angular_cx, 0.0,
+                0.0, angular_fy, angular_cy, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+            };
+        } else {
+            camera_info.distortion_model = "plumb_bob";
+            camera_info.d.assign(5, 0.0);
+            camera_info.k = {
+                projected.camera.fx, 0.0, projected.camera.cx,
+                0.0, projected.camera.fy, projected.camera.cy,
+                0.0, 0.0, 1.0,
+            };
+            camera_info.p = {
+                projected.camera.fx, 0.0, projected.camera.cx, 0.0,
+                0.0, projected.camera.fy, projected.camera.cy, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+            };
+        }
         depth_camera_info_pub_->publish(camera_info);
     }
     if (depth_debug_pub_

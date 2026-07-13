@@ -60,6 +60,11 @@ def generate_launch_description():
         'virtual_depth_enabled', default_value='true',
         description='Publish the virtual forward-facing Z-depth camera'
     )
+    virtual_depth_projection_model_arg = DeclareLaunchArgument(
+        'virtual_depth_projection_model',
+        default_value='pinhole',
+        description='Projection model: pinhole or panorama'
+    )
     virtual_depth_width_arg = DeclareLaunchArgument(
         'virtual_depth_width', default_value='640',
         description='Virtual depth image width'
@@ -153,6 +158,8 @@ def generate_launch_description():
             'virtual_depth.enabled': ParameterValue(
                 LaunchConfiguration('virtual_depth_enabled'), value_type=bool
             ),
+            'virtual_depth.projection_model':
+                LaunchConfiguration('virtual_depth_projection_model'),
             'virtual_depth.width': ParameterValue(
                 LaunchConfiguration('virtual_depth_width'), value_type=int
             ),
@@ -230,6 +237,7 @@ def generate_launch_description():
         world_frame_arg,
         lidar_frame_arg,
         virtual_depth_enabled_arg,
+        virtual_depth_projection_model_arg,
         virtual_depth_width_arg,
         virtual_depth_height_arg,
         virtual_depth_horizontal_fov_arg,

@@ -74,6 +74,7 @@ private:
     std::string virtual_camera_frame_ = "virtual_camera_optical_frame";
     bool virtual_depth_enabled_ = true;
     bool depth_debug_enabled_ = false;
+    std::string depth_projection_model_ = "pinhole";
     std::string depth_debug_color_mode_ = "log";
     double depth_debug_max_depth_ = 30.0;
     std::string depth_orientation_mode_ = "startup_calibrated";
