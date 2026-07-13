@@ -5,7 +5,10 @@
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <cv_bridge/cv_bridge.h>
+#include <opencv2/imgproc.hpp>
 #include <pcl_conversions/pcl_conversions.h>
+#include <sensor_msgs/image_encodings.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -44,8 +47,53 @@ SapphireRos::SapphireRos()
         throw std::invalid_argument(
             "world_frame and lidar_frame must not be empty");
     }
+    virtual_depth_enabled_ =
+        this->declare_parameter<bool>("virtual_depth.enabled", true);
+    depth_debug_enabled_ =
+        this->declare_parameter<bool>("virtual_depth.publish_debug", false);
+    virtual_camera_frame_ = this->declare_parameter<std::string>(
+        "virtual_depth.frame_id", "virtual_camera_optical_frame");
+    depth_orientation_mode_ = this->declare_parameter<std::string>(
+        "virtual_depth.orientation_mode", "startup_calibrated");
+    const double depth_yaw_offset_deg = this->declare_parameter<double>(
+        "virtual_depth.yaw_offset_deg", 0.0);
+    depth_yaw_offset_rad_ =
+        depth_yaw_offset_deg * 3.14159265358979323846 / 180.0;
+    depth_config_.width =
+        this->declare_parameter<int>("virtual_depth.width", 640);
+    depth_config_.height =
+        this->declare_parameter<int>("virtual_depth.height", 320);
+    depth_config_.horizontal_fov_deg = this->declare_parameter<double>(
+        "virtual_depth.horizontal_fov_deg", 120.0);
+    depth_config_.vertical_fov_deg = this->declare_parameter<double>(
+        "virtual_depth.vertical_fov_deg", 60.0);
+    depth_config_.near_depth =
+        this->declare_parameter<double>("virtual_depth.near_depth", 0.5);
+    depth_config_.far_depth =
+        this->declare_parameter<double>("virtual_depth.far_depth", 100.0);
+    depth_config_.hole_fill_radius =
+        this->declare_parameter<int>("virtual_depth.hole_fill_radius", 2);
+    depth_config_.far_fill_depth = static_cast<float>(
+        this->declare_parameter<double>("virtual_depth.far_fill_depth", 100.0));
+    if (virtual_camera_frame_.empty()) {
+        throw std::invalid_argument("virtual_depth.frame_id must not be empty");
+    }
+    if (depth_orientation_mode_ != "lidar"
+        && depth_orientation_mode_ != "startup_calibrated") {
+        throw std::invalid_argument(
+            "virtual_depth.orientation_mode must be 'lidar' or "
+            "'startup_calibrated'");
+    }
+    if (!std::isfinite(depth_yaw_offset_rad_)) {
+        throw std::invalid_argument(
+            "virtual_depth.yaw_offset_deg must be finite");
+    }
+    if (virtual_depth_enabled_) {
+        (void)sapphire::projection::makeDepthCameraModel(depth_config_);
+    }
 
     const sapphire::Config config = sapphire::loadConfig(config_file_);
+    T_imu_lidar_ = config.extrinsics.T_imu_lidar;
     RCLCPP_INFO(
         this->get_logger(),
         "[sapphire_ros2] loaded algorithm config: %s",
@@ -67,6 +115,20 @@ SapphireRos::SapphireRos()
     diagnostics_pub_ =
         this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
             "sapphire/diagnostics", reliable_qos);
+    if (virtual_depth_enabled_) {
+        depth_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+            "sapphire/depth/image", deskewed_qos);
+        depth_camera_info_pub_ =
+            this->create_publisher<sensor_msgs::msg::CameraInfo>(
+                "sapphire/depth/camera_info", deskewed_qos);
+        depth_confidence_pub_ =
+            this->create_publisher<sensor_msgs::msg::Image>(
+                "sapphire/depth/confidence", deskewed_qos);
+        if (depth_debug_enabled_) {
+            depth_debug_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+                "sapphire/depth/debug", deskewed_qos);
+        }
+    }
     if (config.pgo.enabled) {
         auto visualization_qos =
             rclcpp::QoS(1).reliable().transient_local();
@@ -79,6 +141,21 @@ SapphireRos::SapphireRos()
         pgo_visualization_timer_ = this->create_wall_timer(
             std::chrono::seconds(1),
             [this]() { publish_pgo_visualization(); });
+    }
+    if (virtual_depth_enabled_) {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "  Virtual depth: %dx%d, %.1fx%.1f deg, frame=%s",
+            depth_config_.width,
+            depth_config_.height,
+            depth_config_.horizontal_fov_deg,
+            depth_config_.vertical_fov_deg,
+            virtual_camera_frame_.c_str());
+        RCLCPP_INFO(
+            this->get_logger(),
+            "  Virtual depth orientation: %s, yaw offset=%.1f deg",
+            depth_orientation_mode_.c_str(),
+            depth_yaw_offset_deg);
     }
 
     // Match DLIO's execution model: LiDAR may wait for scan-end IMU data,
@@ -275,6 +352,7 @@ void SapphireRos::lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr 
     cloud->is_dense = false;
 
     pipeline_->pushLidar(stamp, cloud);
+    publish_virtual_depth();
 
     const auto result = pipeline_->latestResult();
     if (last_lidar_result_stamp_.has_value()
@@ -548,6 +626,161 @@ void SapphireRos::publish_deskewed(double stamp) {
     ros_msg.header.frame_id = world_frame_;
 
     deskewed_pub_->publish(ros_msg);
+}
+
+sapphire::Isometry3d SapphireRos::virtual_depth_pose(
+    const sapphire::DeskewFrameSnapshot& snapshot)
+{
+    if (depth_orientation_mode_ == "lidar") {
+        return snapshot.T_world_lidar_ref;
+    }
+
+    if (!R_lidar_virtual_) {
+        const Eigen::Matrix3d R_world_imu_initial =
+            pipeline_->imuInitResult().q_gravity.toRotationMatrix();
+        R_lidar_virtual_ =
+            sapphire::projection::makeStartupCalibratedRotation(
+                R_world_imu_initial,
+                T_imu_lidar_,
+                depth_yaw_offset_rad_);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Virtual depth startup mount calibration initialized");
+    }
+
+    sapphire::Isometry3d T_world_virtual = sapphire::Isometry3d::Identity();
+    T_world_virtual.linear() =
+        snapshot.T_world_lidar_ref.rotation() * *R_lidar_virtual_;
+    // Keep the virtual camera at the LiDAR optical centre; the IMU-to-LiDAR
+    // translation must not shift the range origin.
+    T_world_virtual.translation() =
+        snapshot.T_world_lidar_ref.translation();
+    return T_world_virtual;
+}
+
+void SapphireRos::publish_virtual_depth() {
+    if (!virtual_depth_enabled_) {
+        return;
+    }
+    const bool have_subscriber =
+        depth_pub_->get_subscription_count() > 0
+        || depth_camera_info_pub_->get_subscription_count() > 0
+        || depth_confidence_pub_->get_subscription_count() > 0
+        || (depth_debug_pub_
+            && depth_debug_pub_->get_subscription_count() > 0);
+    if (!have_subscriber) {
+        return;
+    }
+
+    const auto snapshot = pipeline_->latestFullDeskewFrame();
+    if (!snapshot || !snapshot->cloud || snapshot->cloud->empty()
+        || (last_virtual_depth_stamp_
+            && snapshot->reference_stamp == *last_virtual_depth_stamp_)) {
+        return;
+    }
+
+    sapphire::projection::DepthImageResult projected;
+    sapphire::Isometry3d T_world_virtual;
+    try {
+        T_world_virtual = virtual_depth_pose(*snapshot);
+        projected = sapphire::projection::createDepthImage(
+            *snapshot->cloud, T_world_virtual, depth_config_);
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "Virtual depth projection failed: %s",
+            error.what());
+        return;
+    }
+    last_virtual_depth_stamp_ = snapshot->reference_stamp;
+
+    std_msgs::msg::Header header;
+    header.stamp = rclcpp::Time(static_cast<int64_t>(
+        std::llround(snapshot->reference_stamp * 1e9)));
+    header.frame_id = virtual_camera_frame_;
+
+    // T_lidar_virtual is fixed after startup calibration. Append the standard
+    // ROS optical-frame rotation: virtual (x forward, y left, z up) to
+    // optical (x right, y down, z forward).
+    Eigen::Matrix3d R_virtual_optical;
+    R_virtual_optical <<
+         0.0,  0.0, 1.0,
+        -1.0,  0.0, 0.0,
+         0.0, -1.0, 0.0;
+    const Eigen::Matrix3d R_lidar_virtual =
+        snapshot->T_world_lidar_ref.rotation().transpose()
+        * T_world_virtual.rotation();
+    const Eigen::Quaterniond q_lidar_optical(
+        R_lidar_virtual * R_virtual_optical);
+    geometry_msgs::msg::TransformStamped optical_transform;
+    optical_transform.header = header;
+    optical_transform.header.frame_id = lidar_frame_;
+    optical_transform.child_frame_id = virtual_camera_frame_;
+    optical_transform.transform.rotation.x = q_lidar_optical.x();
+    optical_transform.transform.rotation.y = q_lidar_optical.y();
+    optical_transform.transform.rotation.z = q_lidar_optical.z();
+    optical_transform.transform.rotation.w = q_lidar_optical.w();
+    tf_broadcaster_->sendTransform(optical_transform);
+
+    if (depth_pub_->get_subscription_count() > 0) {
+        depth_pub_->publish(*cv_bridge::CvImage(
+            header,
+            sensor_msgs::image_encodings::TYPE_32FC1,
+            projected.depth).toImageMsg());
+    }
+    if (depth_confidence_pub_->get_subscription_count() > 0) {
+        depth_confidence_pub_->publish(*cv_bridge::CvImage(
+            header,
+            sensor_msgs::image_encodings::MONO8,
+            projected.confidence).toImageMsg());
+    }
+    if (depth_camera_info_pub_->get_subscription_count() > 0) {
+        sensor_msgs::msg::CameraInfo camera_info;
+        camera_info.header = header;
+        camera_info.width = static_cast<uint32_t>(depth_config_.width);
+        camera_info.height = static_cast<uint32_t>(depth_config_.height);
+        camera_info.distortion_model = "plumb_bob";
+        camera_info.d.assign(5, 0.0);
+        camera_info.k = {
+            projected.camera.fx, 0.0, projected.camera.cx,
+            0.0, projected.camera.fy, projected.camera.cy,
+            0.0, 0.0, 1.0,
+        };
+        camera_info.r = {
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0,
+        };
+        camera_info.p = {
+            projected.camera.fx, 0.0, projected.camera.cx, 0.0,
+            0.0, projected.camera.fy, projected.camera.cy, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+        };
+        depth_camera_info_pub_->publish(camera_info);
+    }
+    if (depth_debug_pub_
+        && depth_debug_pub_->get_subscription_count() > 0) {
+        cv::Mat normalized;
+        const double range =
+            depth_config_.far_depth - depth_config_.near_depth;
+        projected.depth.convertTo(
+            normalized,
+            CV_8UC1,
+            -255.0 / range,
+            255.0 * depth_config_.far_depth / range);
+        cv::Mat color;
+        cv::applyColorMap(normalized, color, cv::COLORMAP_TURBO);
+        depth_debug_pub_->publish(*cv_bridge::CvImage(
+            header,
+            sensor_msgs::image_encodings::BGR8,
+            color).toImageMsg());
+    }
+
+    RCLCPP_DEBUG(
+        this->get_logger(),
+        "Virtual depth coverage raw=%.3f local=%.3f",
+        projected.raw_coverage,
+        projected.local_fill_coverage);
 }
 
 }  // namespace sapphire_ros2

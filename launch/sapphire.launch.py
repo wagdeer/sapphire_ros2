@@ -56,6 +56,61 @@ def generate_launch_description():
         default_value='lidar',
         description='LiDAR child frame used by odometry and TF'
     )
+    virtual_depth_enabled_arg = DeclareLaunchArgument(
+        'virtual_depth_enabled', default_value='true',
+        description='Publish the virtual forward-facing Z-depth camera'
+    )
+    virtual_depth_width_arg = DeclareLaunchArgument(
+        'virtual_depth_width', default_value='640',
+        description='Virtual depth image width'
+    )
+    virtual_depth_height_arg = DeclareLaunchArgument(
+        'virtual_depth_height', default_value='320',
+        description='Virtual depth image height'
+    )
+    virtual_depth_horizontal_fov_arg = DeclareLaunchArgument(
+        'virtual_depth_horizontal_fov_deg', default_value='120.0',
+        description='Virtual camera horizontal field of view in degrees'
+    )
+    virtual_depth_vertical_fov_arg = DeclareLaunchArgument(
+        'virtual_depth_vertical_fov_deg', default_value='60.0',
+        description='Virtual camera vertical field of view in degrees'
+    )
+    virtual_depth_near_arg = DeclareLaunchArgument(
+        'virtual_depth_near_depth', default_value='0.5',
+        description='Virtual camera near clipping depth in metres'
+    )
+    virtual_depth_far_arg = DeclareLaunchArgument(
+        'virtual_depth_far_depth', default_value='100.0',
+        description='Virtual camera far clipping depth in metres'
+    )
+    virtual_depth_hole_fill_radius_arg = DeclareLaunchArgument(
+        'virtual_depth_hole_fill_radius', default_value='2',
+        description='Local nearest-neighbour hole fill radius in pixels'
+    )
+    virtual_depth_far_fill_arg = DeclareLaunchArgument(
+        'virtual_depth_far_fill_depth', default_value='100.0',
+        description='Depth assigned to pixels without local point support'
+    )
+    virtual_depth_debug_arg = DeclareLaunchArgument(
+        'virtual_depth_publish_debug', default_value='false',
+        description='Publish a BGR8 pseudo-colour depth debug image'
+    )
+    virtual_depth_frame_arg = DeclareLaunchArgument(
+        'virtual_depth_frame_id',
+        default_value='virtual_camera_optical_frame',
+        description='Optical frame used by virtual depth image messages'
+    )
+    virtual_depth_orientation_arg = DeclareLaunchArgument(
+        'virtual_depth_orientation_mode',
+        default_value='startup_calibrated',
+        description='Depth orientation: lidar or startup_calibrated'
+    )
+    virtual_depth_yaw_offset_arg = DeclareLaunchArgument(
+        'virtual_depth_yaw_offset_deg',
+        default_value='0.0',
+        description='Additional virtual forward yaw offset in degrees'
+    )
 
     # Node
     sapphire_node = Node(
@@ -70,6 +125,51 @@ def generate_launch_description():
             ),
             'world_frame': LaunchConfiguration('world_frame'),
             'lidar_frame': LaunchConfiguration('lidar_frame'),
+            'virtual_depth.enabled': ParameterValue(
+                LaunchConfiguration('virtual_depth_enabled'), value_type=bool
+            ),
+            'virtual_depth.width': ParameterValue(
+                LaunchConfiguration('virtual_depth_width'), value_type=int
+            ),
+            'virtual_depth.height': ParameterValue(
+                LaunchConfiguration('virtual_depth_height'), value_type=int
+            ),
+            'virtual_depth.horizontal_fov_deg': ParameterValue(
+                LaunchConfiguration('virtual_depth_horizontal_fov_deg'),
+                value_type=float
+            ),
+            'virtual_depth.vertical_fov_deg': ParameterValue(
+                LaunchConfiguration('virtual_depth_vertical_fov_deg'),
+                value_type=float
+            ),
+            'virtual_depth.near_depth': ParameterValue(
+                LaunchConfiguration('virtual_depth_near_depth'),
+                value_type=float
+            ),
+            'virtual_depth.far_depth': ParameterValue(
+                LaunchConfiguration('virtual_depth_far_depth'),
+                value_type=float
+            ),
+            'virtual_depth.hole_fill_radius': ParameterValue(
+                LaunchConfiguration('virtual_depth_hole_fill_radius'),
+                value_type=int
+            ),
+            'virtual_depth.far_fill_depth': ParameterValue(
+                LaunchConfiguration('virtual_depth_far_fill_depth'),
+                value_type=float
+            ),
+            'virtual_depth.publish_debug': ParameterValue(
+                LaunchConfiguration('virtual_depth_publish_debug'),
+                value_type=bool
+            ),
+            'virtual_depth.frame_id':
+                LaunchConfiguration('virtual_depth_frame_id'),
+            'virtual_depth.orientation_mode':
+                LaunchConfiguration('virtual_depth_orientation_mode'),
+            'virtual_depth.yaw_offset_deg': ParameterValue(
+                LaunchConfiguration('virtual_depth_yaw_offset_deg'),
+                value_type=float
+            ),
         }],
         remappings=[
             ('lidar/points', LaunchConfiguration('lidar_topic')),
@@ -86,5 +186,18 @@ def generate_launch_description():
         acc_scale_arg,
         world_frame_arg,
         lidar_frame_arg,
+        virtual_depth_enabled_arg,
+        virtual_depth_width_arg,
+        virtual_depth_height_arg,
+        virtual_depth_horizontal_fov_arg,
+        virtual_depth_vertical_fov_arg,
+        virtual_depth_near_arg,
+        virtual_depth_far_arg,
+        virtual_depth_hole_fill_radius_arg,
+        virtual_depth_far_fill_arg,
+        virtual_depth_debug_arg,
+        virtual_depth_frame_arg,
+        virtual_depth_orientation_arg,
+        virtual_depth_yaw_offset_arg,
         sapphire_node,
     ])

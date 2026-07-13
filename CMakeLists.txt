@@ -12,6 +12,7 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -23,6 +24,7 @@ find_package(pcl_ros REQUIRED)
 find_package(PCL REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 
 # Find sapphire core — add_subdirectory in colcon workspace, find_package otherwise
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/CMakeLists.txt")
@@ -40,14 +42,16 @@ add_executable(sapphire_ros_node
 )
 target_include_directories(sapphire_ros_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(sapphire_ros_node
     sapphire
     ${PCL_LIBRARIES}
+    ${OpenCV_LIBS}
 )
 ament_target_dependencies(sapphire_ros_node
     ament_index_cpp rclcpp sensor_msgs nav_msgs diagnostic_msgs geometry_msgs
-    visualization_msgs tf2 tf2_ros tf2_eigen pcl_ros
+    visualization_msgs tf2 tf2_ros tf2_eigen pcl_ros cv_bridge
 )
 
 # Install
