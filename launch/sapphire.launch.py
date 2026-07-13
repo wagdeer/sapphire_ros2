@@ -81,6 +81,16 @@ def generate_launch_description():
         'virtual_depth_vertical_fov_deg', default_value='60.0',
         description='Virtual camera vertical field of view in degrees'
     )
+    virtual_depth_panorama_min_elevation_arg = DeclareLaunchArgument(
+        'virtual_depth_panorama_min_elevation_deg',
+        default_value='-10.0',
+        description='Lowest panorama elevation retained for Mid-360'
+    )
+    virtual_depth_panorama_max_elevation_arg = DeclareLaunchArgument(
+        'virtual_depth_panorama_max_elevation_deg',
+        default_value='55.0',
+        description='Highest panorama elevation retained for Mid-360'
+    )
     virtual_depth_near_arg = DeclareLaunchArgument(
         'virtual_depth_near_depth', default_value='0.5',
         description='Virtual camera near clipping depth in metres'
@@ -174,6 +184,18 @@ def generate_launch_description():
                 LaunchConfiguration('virtual_depth_vertical_fov_deg'),
                 value_type=float
             ),
+            'virtual_depth.panorama_min_elevation_deg': ParameterValue(
+                LaunchConfiguration(
+                    'virtual_depth_panorama_min_elevation_deg'
+                ),
+                value_type=float
+            ),
+            'virtual_depth.panorama_max_elevation_deg': ParameterValue(
+                LaunchConfiguration(
+                    'virtual_depth_panorama_max_elevation_deg'
+                ),
+                value_type=float
+            ),
             'virtual_depth.near_depth': ParameterValue(
                 LaunchConfiguration('virtual_depth_near_depth'),
                 value_type=float
@@ -242,6 +264,8 @@ def generate_launch_description():
         virtual_depth_height_arg,
         virtual_depth_horizontal_fov_arg,
         virtual_depth_vertical_fov_arg,
+        virtual_depth_panorama_min_elevation_arg,
+        virtual_depth_panorama_max_elevation_arg,
         virtual_depth_near_arg,
         virtual_depth_far_arg,
         virtual_depth_hole_fill_radius_arg,

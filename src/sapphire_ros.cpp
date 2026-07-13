@@ -80,6 +80,12 @@ SapphireRos::SapphireRos()
         "virtual_depth.horizontal_fov_deg", 120.0);
     depth_config_.vertical_fov_deg = this->declare_parameter<double>(
         "virtual_depth.vertical_fov_deg", 60.0);
+    depth_config_.panorama_min_elevation_deg =
+        this->declare_parameter<double>(
+            "virtual_depth.panorama_min_elevation_deg", -10.0);
+    depth_config_.panorama_max_elevation_deg =
+        this->declare_parameter<double>(
+            "virtual_depth.panorama_max_elevation_deg", 55.0);
     depth_config_.near_depth =
         this->declare_parameter<double>("virtual_depth.near_depth", 0.5);
     depth_config_.far_depth =
@@ -203,8 +209,17 @@ SapphireRos::SapphireRos()
             depth_config_.projection_model
                     == sapphire::projection::DepthProjectionModel::
                         Equirectangular
-                ? " (360x180 deg, radial range)"
+                ? " (360 deg cylindrical, radial range)"
                 : " (optical Z-depth)");
+        if (depth_config_.projection_model
+            == sapphire::projection::DepthProjectionModel::
+                Equirectangular) {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "  Panorama elevation: %.1f to %.1f deg",
+                depth_config_.panorama_min_elevation_deg,
+                depth_config_.panorama_max_elevation_deg);
+        }
         RCLCPP_INFO(
             this->get_logger(),
             "  Virtual depth orientation: %s, yaw offset=%.1f deg",
@@ -876,13 +891,19 @@ void SapphireRos::publish_virtual_depth() {
             const double angular_fx =
                 static_cast<double>(depth_config_.width)
                 / (2.0 * 3.14159265358979323846);
+            const double min_elevation =
+                depth_config_.panorama_min_elevation_deg
+                * 3.14159265358979323846 / 180.0;
+            const double max_elevation =
+                depth_config_.panorama_max_elevation_deg
+                * 3.14159265358979323846 / 180.0;
             const double angular_fy =
                 static_cast<double>(depth_config_.height)
-                / 3.14159265358979323846;
+                / (max_elevation - min_elevation);
             const double angular_cx =
                 static_cast<double>(depth_config_.width) * 0.5;
             const double angular_cy =
-                static_cast<double>(depth_config_.height) * 0.5;
+                max_elevation * angular_fy;
             camera_info.k = {
                 angular_fx, 0.0, angular_cx,
                 0.0, angular_fy, angular_cy,
