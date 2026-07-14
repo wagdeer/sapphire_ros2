@@ -13,7 +13,6 @@ find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -46,7 +45,7 @@ target_link_libraries(sapphire_ros_node
     ${PCL_LIBRARIES}
 )
 ament_target_dependencies(sapphire_ros_node
-    ament_index_cpp rclcpp sensor_msgs nav_msgs diagnostic_msgs geometry_msgs
+    ament_index_cpp rclcpp sensor_msgs nav_msgs geometry_msgs
     visualization_msgs tf2 tf2_ros tf2_eigen pcl_ros
 )
 
