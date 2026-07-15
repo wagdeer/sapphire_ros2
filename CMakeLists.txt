@@ -7,6 +7,21 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 
+option(SAPPHIRE_ENABLE_LTO
+  "Enable IPO/LTO for Sapphire Release targets when supported" ON)
+
+set(SAPPHIRE_ROS2_IPO_SUPPORTED FALSE)
+if(SAPPHIRE_ENABLE_LTO)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT SAPPHIRE_ROS2_IPO_SUPPORTED
+    OUTPUT SAPPHIRE_ROS2_IPO_ERROR LANGUAGES CXX)
+  if(NOT SAPPHIRE_ROS2_IPO_SUPPORTED)
+    message(WARNING
+      "SAPPHIRE_ENABLE_LTO is ON, but IPO/LTO is unavailable: "
+      "${SAPPHIRE_ROS2_IPO_ERROR}")
+  endif()
+endif()
+
 # ── Dependencies ─────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
@@ -48,6 +63,10 @@ ament_target_dependencies(sapphire_ros_node
     ament_index_cpp rclcpp sensor_msgs nav_msgs geometry_msgs
     visualization_msgs tf2 tf2_ros tf2_eigen pcl_ros
 )
+if(SAPPHIRE_ENABLE_LTO AND SAPPHIRE_ROS2_IPO_SUPPORTED)
+  set_property(TARGET sapphire_ros_node
+    PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
 
 # Install
 install(TARGETS sapphire_ros_node DESTINATION lib/${PROJECT_NAME})
