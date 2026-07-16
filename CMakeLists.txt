@@ -70,6 +70,9 @@ endif()
 
 # Install
 install(TARGETS sapphire_ros_node DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/odom_metrics.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME odom_metrics)
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/cfg")
