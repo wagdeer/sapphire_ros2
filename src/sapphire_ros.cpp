@@ -6,7 +6,6 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <chrono>
-#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -18,11 +17,6 @@ SapphireRos::SapphireRos()
 {
     RCLCPP_INFO(this->get_logger(), "[sapphire_ros2] node starting");
 
-    acc_scale_ = this->declare_parameter<double>("acc_scale", 1.0);
-    if (!std::isfinite(acc_scale_) || acc_scale_ <= 0.0) {
-        throw std::invalid_argument(
-            "acc_scale must be finite and greater than zero");
-    }
     const std::string default_config_file =
         ament_index_cpp::get_package_share_directory("sapphire_ros2")
         + "/cfg/sapphire_mid360.toml";
@@ -274,7 +268,7 @@ void SapphireRos::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
     sapphire::ImuData imu;
     imu.stamp = static_cast<double>(msg->header.stamp.sec)
               + static_cast<double>(msg->header.stamp.nanosec) * 1e-9;
-    imu.accel = acc_scale_ * Eigen::Vector3d(
+    imu.accel = Eigen::Vector3d(
         msg->linear_acceleration.x,
         msg->linear_acceleration.y,
         msg->linear_acceleration.z);

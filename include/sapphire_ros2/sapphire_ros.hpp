@@ -51,7 +51,6 @@ private:
     rclcpp::CallbackGroup::SharedPtr imu_cb_group_;
 
     // ── Core ─────────────────────────────────────────────────────
-    double acc_scale_ = 1.0;  // raw acceleration unit → m/s²
     sapphire::sensor::IngestConfig lidar_ingest_;
     bool require_point_time_ = false;
     bool lidar_time_locked_ = false;
