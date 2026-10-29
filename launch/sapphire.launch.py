@@ -28,12 +28,12 @@ def generate_launch_description():
     )
     lidar_topic_arg = DeclareLaunchArgument(
         'lidar_topic',
-        default_value='/livox/lidar',
+        default_value='/front_lidar',
         description='LiDAR pointcloud topic'
     )
     imu_topic_arg = DeclareLaunchArgument(
         'imu_topic',
-        default_value='/livox/imu',
+        default_value='/front_lidar/imu',
         description='IMU data topic'
     )
     odom_topic_arg = DeclareLaunchArgument(

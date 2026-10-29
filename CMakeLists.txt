@@ -33,10 +33,14 @@ find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
-find_package(pcl_ros REQUIRED)
-find_package(PCL REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
+# C++-only projects do not define MPI::MPI_C. System PCL loads VTK, and
+# VTK::mpi names that target. The SLAM does not call MPI.
+enable_language(C)
+find_package(MPI REQUIRED COMPONENTS C)
+find_package(pcl_ros REQUIRED)
+find_package(PCL REQUIRED)
 
 # Find sapphire core — add_subdirectory in colcon workspace, find_package otherwise
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/CMakeLists.txt")
