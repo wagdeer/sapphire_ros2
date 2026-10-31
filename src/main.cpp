@@ -33,7 +33,13 @@ int main(int argc, char** argv) {
     rclcpp::executors::MultiThreadedExecutor executor(
         rclcpp::ExecutorOptions{}, 2);
     executor.add_node(node);
-    executor.spin();
+    try {
+        executor.spin();
+    } catch (...) {
+        node->saveTrajectory();
+        throw;
+    }
+    node->saveTrajectory();
     rclcpp::shutdown();
     return 0;
 }

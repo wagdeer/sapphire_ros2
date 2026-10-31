@@ -1,11 +1,13 @@
 #include <sapphire_ros2/sapphire_ros.hpp>
 
 #include <sapphire/config.hpp>
+#include <sapphire/io/tum.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <chrono>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -35,6 +37,7 @@ SapphireRos::SapphireRos()
     }
 
     const sapphire::Config config = sapphire::loadConfig(config_file_);
+    trajectory_output_path_ = sapphire::trajectoryOutputPath(config);
     lidar_ingest_.time_field = config.sensor.lidar.time_field;
     lidar_ingest_.time_unit = config.sensor.lidar.time_unit;
     lidar_ingest_.time_ref = config.sensor.lidar.time_ref;
@@ -45,6 +48,17 @@ SapphireRos::SapphireRos()
         this->get_logger(),
         "[sapphire_ros2] loaded algorithm config: %s",
         config_file_.c_str());
+    if (trajectory_output_path_.empty()) {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[sapphire_ros2] TUM trajectory dump is off "
+            "(output.trajectory_dir is empty)");
+    } else {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[sapphire_ros2] TUM trajectory will be saved on exit: %s",
+            trajectory_output_path_.c_str());
+    }
     pipeline_ = std::make_unique<sapphire::OdometryPipeline>(config);
     tf_broadcaster_ =
         std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -105,6 +119,48 @@ SapphireRos::SapphireRos()
         imu_options);
 
     RCLCPP_INFO(this->get_logger(), "[sapphire_ros2] ready");
+}
+
+SapphireRos::~SapphireRos() {
+    saveTrajectory();
+}
+
+void SapphireRos::saveTrajectory() {
+    if (trajectory_saved_.exchange(true)) {
+        return;
+    }
+    if (trajectory_output_path_.empty() || !pipeline_) {
+        return;
+    }
+
+    try {
+        const sapphire::TumWriteResult result = sapphire::writeTumTrajectory(
+            trajectory_output_path_, pipeline_->mapTrajectory());
+        if (result.written == 0) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "[sapphire_ros2] no TUM trajectory written to %s",
+                trajectory_output_path_.c_str());
+            return;
+        }
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[sapphire_ros2] wrote %zu TUM poses to %s",
+            result.written,
+            trajectory_output_path_.c_str());
+        if (result.skipped > 0) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "[sapphire_ros2] skipped %zu trajectory poses with "
+                "non-finite values or non-increasing timestamps",
+                result.skipped);
+        }
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "[sapphire_ros2] failed to write TUM trajectory: %s",
+            error.what());
+    }
 }
 
 namespace {

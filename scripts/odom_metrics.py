@@ -14,7 +14,8 @@ import os
 from pathlib import Path
 
 import rclpy
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import Odometry
+from nav_msgs.msg import Path as PathMsg
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -50,7 +51,7 @@ class OdomMetrics(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._path_subscription = self.create_subscription(
-            Path, "/sapphire/trajectory", self._on_path, path_qos
+            PathMsg, "/sapphire/trajectory", self._on_path, path_qos
         )
 
     def _on_odometry(self, message: Odometry) -> None:
@@ -66,7 +67,7 @@ class OdomMetrics(Node):
         self._odom_poses.append((stamp, xyz, quat))
         self._stream.write(_tum_line(stamp, xyz, quat))
 
-    def _on_path(self, message: Path) -> None:
+    def _on_path(self, message: PathMsg) -> None:
         poses: list[tuple[float, tuple, tuple]] = []
         for pose_stamped in message.poses:
             stamp = _stamp_seconds(pose_stamped.header.stamp)

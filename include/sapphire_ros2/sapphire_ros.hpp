@@ -10,6 +10,8 @@
 
 #include <sapphire/odometry/pipeline.hpp>
 #include <sapphire/sensor/cloud_ingest.hpp>
+#include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -22,6 +24,10 @@ namespace sapphire_ros2 {
 class SapphireRos : public rclcpp::Node {
 public:
     SapphireRos();
+    ~SapphireRos() override;
+
+    /// Write the map trajectory in TUM format. Safe to call more than once.
+    void saveTrajectory();
 
 private:
     // ── Callbacks ─────────────────────────────────────────────────
@@ -62,6 +68,8 @@ private:
     std::string lidar_frame_ = "lidar";
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::unique_ptr<sapphire::OdometryPipeline> pipeline_;
+    std::filesystem::path trajectory_output_path_;
+    std::atomic<bool> trajectory_saved_{false};
     std::optional<double> last_lidar_result_stamp_;
     std::mutex trajectory_publish_mutex_;
     bool trajectory_published_ = false;
