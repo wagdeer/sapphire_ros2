@@ -2,11 +2,11 @@
 
 #include <sapphire/config.hpp>
 #include <sapphire/io/tum.hpp>
-#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <sapphire_ros2/conversion.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <pcl_conversions/pcl_conversions.h>
 
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <memory>
 #include <stdexcept>
@@ -19,11 +19,8 @@ SapphireRos::SapphireRos()
 {
     RCLCPP_INFO(this->get_logger(), "[sapphire_ros2] node starting");
 
-    const std::string default_config_file =
-        ament_index_cpp::get_package_share_directory("sapphire_ros2")
-        + "/cfg/sapphire_mid360.toml";
     config_file_ = this->declare_parameter<std::string>(
-        "config_file", default_config_file);
+        "config_file", "");
     if (config_file_.empty()) {
         throw std::invalid_argument("config_file must not be empty");
     }
@@ -31,13 +28,39 @@ SapphireRos::SapphireRos()
         this->declare_parameter<std::string>("world_frame", "map");
     lidar_frame_ =
         this->declare_parameter<std::string>("lidar_frame", "lidar");
-    if (world_frame_.empty() || lidar_frame_.empty()) {
+    imu_frame_ =
+        this->declare_parameter<std::string>("imu_frame", "imu");
+    pose_frame_ =
+        this->declare_parameter<std::string>("pose_frame", "lidar");
+    lidar_time_offset_s_ =
+        this->declare_parameter<double>("lidar_time_offset", 0.0);
+    imu_time_offset_s_ =
+        this->declare_parameter<double>("imu_time_offset", 0.0);
+    if (
+        world_frame_.empty() || lidar_frame_.empty() || imu_frame_.empty()) {
         throw std::invalid_argument(
-            "world_frame and lidar_frame must not be empty");
+            "world_frame, lidar_frame, and imu_frame must not be empty");
+    }
+    if (pose_frame_ != "lidar" && pose_frame_ != "imu") {
+        throw std::invalid_argument(
+            "pose_frame must be either 'lidar' or 'imu'");
+    }
+    if (
+        !std::isfinite(lidar_time_offset_s_)
+        || !std::isfinite(imu_time_offset_s_)) {
+        throw std::invalid_argument("sensor time offsets must be finite");
     }
 
     const sapphire::Config config = sapphire::loadConfig(config_file_);
     trajectory_output_path_ = sapphire::trajectoryOutputPath(config);
+    const std::string trajectory_output_override =
+        this->declare_parameter<std::string>("trajectory_output", "");
+    if (!trajectory_output_override.empty()) {
+        trajectory_output_path_ = trajectory_output_override;
+    }
+    if (pose_frame_ == "imu") {
+        T_pose_lidar_ = config.extrinsics.T_imu_lidar.inverse();
+    }
     lidar_ingest_.time_field = config.sensor.lidar.time_field;
     lidar_ingest_.time_unit = config.sensor.lidar.time_unit;
     lidar_ingest_.time_ref = config.sensor.lidar.time_ref;
@@ -63,7 +86,17 @@ SapphireRos::SapphireRos()
     tf_broadcaster_ =
         std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    auto sensor_qos = rclcpp::SensorDataQoS();
+    lidar_cb_group_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+    imu_cb_group_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    auto lidar_qos = rclcpp::SensorDataQoS();
+    lidar_qos.keep_last(1);
+    auto imu_qos = rclcpp::SensorDataQoS();
+    // Cover the core's 500 ms scan-end IMU wait without forcing LiDAR
+    // callbacks to retain stale point clouds.
+    imu_qos.keep_last(100);
     auto deskewed_qos = rclcpp::SensorDataQoS();
     deskewed_qos.keep_last(1);
     auto reliable_qos = rclcpp::QoS(10).reliable();
@@ -90,21 +123,17 @@ SapphireRos::SapphireRos()
                 "sapphire/pgo/graph", visualization_qos);
         pgo_visualization_timer_ = this->create_wall_timer(
             std::chrono::seconds(1),
-            [this]() { publish_pgo_visualization(); });
+            [this]() { pgo_visualization_callback(); },
+            lidar_cb_group_);
     }
 
     // Match DLIO's execution model: LiDAR may wait for scan-end IMU data,
     // therefore IMU callbacks must be able to run concurrently.
-    lidar_cb_group_ = this->create_callback_group(
-        rclcpp::CallbackGroupType::MutuallyExclusive);
-    imu_cb_group_ = this->create_callback_group(
-        rclcpp::CallbackGroupType::MutuallyExclusive);
-
     rclcpp::SubscriptionOptions lidar_options;
     lidar_options.callback_group = lidar_cb_group_;
     lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "lidar/points", sensor_qos,
-        [this](const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+        "lidar/points", lidar_qos,
+        [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
             lidar_callback(msg);
         },
         lidar_options);
@@ -112,8 +141,8 @@ SapphireRos::SapphireRos()
     rclcpp::SubscriptionOptions imu_options;
     imu_options.callback_group = imu_cb_group_;
     imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-        "imu/data", sensor_qos,
-        [this](const sensor_msgs::msg::Imu::SharedPtr msg) {
+        "imu/data", imu_qos,
+        [this](const sensor_msgs::msg::Imu::ConstSharedPtr msg) {
             imu_callback(msg);
         },
         imu_options);
@@ -134,8 +163,14 @@ void SapphireRos::saveTrajectory() {
     }
 
     try {
+        sapphire::MapTrajectory trajectory =
+            pipeline_->mapTrajectory();
+        for (sapphire::MapTrajectorySample& sample : trajectory.samples) {
+            sample.T_map_lidar =
+                sample.T_map_lidar * T_pose_lidar_;
+        }
         const sapphire::TumWriteResult result = sapphire::writeTumTrajectory(
-            trajectory_output_path_, pipeline_->mapTrajectory());
+            trajectory_output_path_, trajectory);
         if (result.written == 0) {
             RCLCPP_WARN(
                 this->get_logger(),
@@ -163,214 +198,177 @@ void SapphireRos::saveTrajectory() {
     }
 }
 
-namespace {
+void SapphireRos::lidar_callback(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
+{
+    try {
+        if (msg->width == 0 || msg->height == 0) {
+            return;
+        }
 
-const char* datatypeLabel(uint8_t datatype) {
-    switch (datatype) {
-        case 1: return "I8";
-        case 2: return "U8";
-        case 3: return "I16";
-        case 4: return "U16";
-        case 5: return "I32";
-        case 6: return "U32";
-        case 7: return "F32";
-        case 8: return "F64";
-        default: return "?";
-    }
-}
+        const sapphire::sensor::CloudView view =
+            make_cloud_view(*msg);
+        const auto ingested =
+            sapphire::sensor::ingest(view, lidar_ingest_);
+        const double stamp = view.header_stamp;
 
-sapphire::sensor::CloudView makeView(const sensor_msgs::msg::PointCloud2& msg) {
-    sapphire::sensor::CloudView view;
-    view.fields.reserve(msg.fields.size());
-    for (const auto& field : msg.fields) {
-        view.fields.push_back(
-            {field.name, field.offset, field.datatype, field.count});
-    }
-    view.data = msg.data.empty() ? nullptr : msg.data.data();
-    view.data_size = msg.data.size();
-    view.width = msg.width;
-    view.point_count = static_cast<size_t>(msg.width) * msg.height;
-    view.point_step = msg.point_step;
-    view.row_step = msg.row_step;
-    view.is_bigendian = msg.is_bigendian;
-    view.header_stamp = static_cast<double>(msg.header.stamp.sec)
-        + static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
-    return view;
-}
+        if (!std::isfinite(stamp)) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                5000,
+                "[sensor] dropping lidar frame with non-finite stamp");
+            return;
+        }
+        if (ingested.points.empty()) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                5000,
+                "[sensor] dropping lidar frame: %s",
+                ingested.time.note.empty()
+                    ? "no points"
+                    : ingested.time.note.c_str());
+            return;
+        }
+        if (!ingested.time.ok && require_point_time_) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                5000,
+                "[sensor] dropping lidar frame: %s",
+                ingested.time.note.c_str());
+            return;
+        }
 
-}  // namespace
+        if (ingested.time.ok && !lidar_time_locked_) {
+            lidar_ingest_.time_field = ingested.time.field;
+            lidar_ingest_.time_unit =
+                sapphire::sensor::unitName(ingested.time.unit);
+            lidar_ingest_.time_ref =
+                ingested.time.ref == sapphire::sensor::TimeRef::Absolute
+                ? "absolute"
+                : "relative";
+            locked_lidar_span_s_ = ingested.time.span_s;
+            lidar_time_locked_ = true;
 
-void SapphireRos::lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-    if (msg->width == 0 || msg->height == 0) {
-        return;
-    }
-
-    const sapphire::sensor::CloudView view = makeView(*msg);
-    sapphire::sensor::IngestConfig ingest_cfg = lidar_ingest_;
-    const auto ingested = sapphire::sensor::ingest(view, ingest_cfg);
-    const double stamp = view.header_stamp;
-
-    if (ingested.points.empty()) {
-        RCLCPP_WARN_THROTTLE(
-            this->get_logger(),
-            *this->get_clock(),
-            5000,
-            "[sensor] dropping lidar frame: %s",
-            ingested.time.note.empty() ? "no points" : ingested.time.note.c_str());
-        return;
-    }
-    if (!ingested.time.ok && require_point_time_) {
-        RCLCPP_WARN_THROTTLE(
-            this->get_logger(),
-            *this->get_clock(),
-            5000,
-            "[sensor] dropping lidar frame: %s",
-            ingested.time.note.c_str());
-        return;
-    }
-
-    if (ingested.time.ok && !lidar_time_locked_) {
-        lidar_ingest_.time_field = ingested.time.field;
-        lidar_ingest_.time_unit = sapphire::sensor::unitName(ingested.time.unit);
-        lidar_ingest_.time_ref = ingested.time.ref == sapphire::sensor::TimeRef::Absolute
-            ? "absolute"
-            : "relative";
-        locked_lidar_span_s_ = ingested.time.span_s;
-        lidar_time_locked_ = true;
-
-        const char* dtype = "?";
-        for (const auto& field : view.fields) {
-            if (field.name == ingested.time.field) {
-                dtype = datatypeLabel(field.datatype);
-                break;
+            const sapphire::sensor::FieldDescriptor* time_field =
+                sapphire::sensor::findField(view, ingested.time.field);
+            RCLCPP_INFO(
+                this->get_logger(),
+                "[sensor] lidar field=%s(%s) unit=%s ref=%s span=%.6fs "
+                "header_offset=%+.6fs kept=%zu dropped_time=%zu deskew=%s",
+                ingested.time.field.c_str(),
+                datatype_label(
+                    time_field == nullptr ? 0 : time_field->datatype),
+                lidar_ingest_.time_unit.c_str(),
+                lidar_ingest_.time_ref.c_str(),
+                ingested.time.span_s,
+                ingested.time.header_offset_s,
+                ingested.points.size(),
+                ingested.dropped_time,
+                ingested.deskewable ? "on" : "off");
+            RCLCPP_INFO(
+                this->get_logger(),
+                "[sensor] profile: time_field=\"%s\" time_unit=\"%s\" "
+                "time_ref=\"%s\"",
+                lidar_ingest_.time_field.c_str(),
+                lidar_ingest_.time_unit.c_str(),
+                lidar_ingest_.time_ref.c_str());
+        } else if (
+            ingested.time.ok && lidar_time_locked_
+            && locked_lidar_span_s_ > 0.0 && !warned_lidar_span_ratio_) {
+            const double ratio =
+                ingested.time.span_s / locked_lidar_span_s_;
+            if (ratio > 10.0 || ratio < 0.1) {
+                warned_lidar_span_ratio_ = true;
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "[sensor] lidar span changed by more than 10x under the "
+                    "locked unit: locked=%.6fs now=%.6fs",
+                    locked_lidar_span_s_,
+                    ingested.time.span_s);
             }
         }
-        RCLCPP_INFO(
-            this->get_logger(),
-            "[sensor] lidar field=%s(%s) unit=%s ref=%s span=%.6fs "
-            "header_offset=%+.6fs kept=%zu dropped_time=%zu deskew=%s",
-            ingested.time.field.c_str(),
-            dtype,
-            lidar_ingest_.time_unit.c_str(),
-            lidar_ingest_.time_ref.c_str(),
-            ingested.time.span_s,
-            ingested.time.header_offset_s,
-            ingested.points.size(),
-            ingested.dropped_time,
-            ingested.deskewable ? "on" : "off");
-        RCLCPP_INFO(
-            this->get_logger(),
-            "[sensor] profile: time_field=\"%s\" time_unit=\"%s\" time_ref=\"%s\"",
-            lidar_ingest_.time_field.c_str(),
-            lidar_ingest_.time_unit.c_str(),
-            lidar_ingest_.time_ref.c_str());
-    } else if (
-        ingested.time.ok && lidar_time_locked_ && locked_lidar_span_s_ > 0.0
-        && !warned_lidar_span_ratio_) {
-        const double ratio = ingested.time.span_s / locked_lidar_span_s_;
-        if (ratio > 10.0 || ratio < 0.1) {
-            warned_lidar_span_ratio_ = true;
+        if (
+            ingested.time.ok && ingested.time.header_mismatch
+            && !warned_lidar_header_mismatch_) {
+            warned_lidar_header_mismatch_ = true;
             RCLCPP_WARN(
                 this->get_logger(),
-                "[sensor] lidar span changed by more than 10x under the locked "
-                "unit: locked=%.6fs now=%.6fs",
-                locked_lidar_span_s_,
-                ingested.time.span_s);
+                "[sensor] lidar header_mismatch: header_offset=%+.6fs; "
+                "using point time as absolute seconds",
+                ingested.time.header_offset_s);
         }
-    }
-    if (ingested.time.ok && ingested.time.header_mismatch
-        && !warned_lidar_header_mismatch_) {
-        warned_lidar_header_mismatch_ = true;
-        RCLCPP_WARN(
+
+        pipeline_->pushLidar(
+            stamp + lidar_time_offset_s_,
+            to_core_cloud(ingested, lidar_time_offset_s_));
+
+        const auto result = pipeline_->latestResult();
+        if (last_lidar_result_stamp_.has_value()
+            && result.stamp == *last_lidar_result_stamp_) {
+            return;
+        }
+        last_lidar_result_stamp_ = result.stamp;
+        if (result.converged) {
+            const auto propagated = pipeline_->latestPropagatedResult();
+            publish_odometry(propagated.value_or(result));
+            publish_deskewed(result.stamp);
+            publish_trajectory();
+        }
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR_THROTTLE(
             this->get_logger(),
-            "[sensor] lidar header_mismatch: header_offset=%+.6fs; "
-            "using point time as absolute seconds",
-            ingested.time.header_offset_s);
-    }
-
-    auto cloud = std::make_shared<sapphire::PointCloud>();
-    cloud->points.reserve(ingested.points.size());
-    for (const auto& source : ingested.points) {
-        sapphire::Point point;
-        point.x = source.x;
-        point.y = source.y;
-        point.z = source.z;
-        point.data[3] = 1.0f;
-        point.intensity = source.intensity;
-        point.timestamp = source.stamp;
-        cloud->points.push_back(point);
-    }
-    cloud->width = cloud->points.size();
-    cloud->height = 1;
-    cloud->is_dense = false;
-
-    pipeline_->pushLidar(stamp, cloud);
-
-    const auto result = pipeline_->latestResult();
-    if (last_lidar_result_stamp_.has_value()
-        && result.stamp == *last_lidar_result_stamp_) {
-        return;
-    }
-    last_lidar_result_stamp_ = result.stamp;
-    if (result.converged) {
-        const auto propagated = pipeline_->latestPropagatedResult();
-        publish_odometry(propagated.value_or(result));
-        publish_deskewed(result.stamp);
-        publish_trajectory();
+            *this->get_clock(),
+            5000,
+            "[sapphire_ros2] LiDAR callback failed: %s",
+            error.what());
     }
 }
 
-void SapphireRos::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-    sapphire::ImuData imu;
-    imu.stamp = static_cast<double>(msg->header.stamp.sec)
-              + static_cast<double>(msg->header.stamp.nanosec) * 1e-9;
-    imu.accel = Eigen::Vector3d(
-        msg->linear_acceleration.x,
-        msg->linear_acceleration.y,
-        msg->linear_acceleration.z);
-    imu.gyro = {msg->angular_velocity.x,
-                msg->angular_velocity.y,
-                msg->angular_velocity.z};
-
-    pipeline_->pushImu(imu);
-    if (const auto propagated = pipeline_->latestPropagatedResult()) {
-        publish_odometry(*propagated);
+void SapphireRos::imu_callback(
+    const sensor_msgs::msg::Imu::ConstSharedPtr msg)
+{
+    try {
+        sapphire::ImuData imu = to_core_imu(*msg);
+        imu.stamp += imu_time_offset_s_;
+        pipeline_->pushImu(imu);
+        if (const auto propagated = pipeline_->latestPropagatedResult()) {
+            publish_odometry(*propagated);
+        }
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            5000,
+            "[sapphire_ros2] IMU callback failed: %s",
+            error.what());
     }
 }
 
 void SapphireRos::publish_odometry(const sapphire::OdometryResult& result) {
-    const rclcpp::Time stamp(
-        static_cast<int64_t>(std::llround(result.stamp * 1e9)));
-    auto msg = nav_msgs::msg::Odometry();
-    msg.header.stamp = stamp;
-    msg.header.frame_id = world_frame_;
-    msg.child_frame_id = lidar_frame_;
+    const std::string& child_frame =
+        pose_frame_ == "imu" ? imu_frame_ : lidar_frame_;
+    const auto msg = to_ros_odometry(
+        result, world_frame_, child_frame, T_pose_lidar_);
+    const int64_t stamp_ns =
+        static_cast<int64_t>(msg.header.stamp.sec) * 1000000000LL
+        + static_cast<int64_t>(msg.header.stamp.nanosec);
 
-    const auto& T = result.T_world_lidar;
-    msg.pose.pose.position.x = T.translation().x();
-    msg.pose.pose.position.y = T.translation().y();
-    msg.pose.pose.position.z = T.translation().z();
-    Eigen::Quaterniond q(T.rotation());
-    msg.pose.pose.orientation.x = q.x();
-    msg.pose.pose.orientation.y = q.y();
-    msg.pose.pose.orientation.z = q.z();
-    msg.pose.pose.orientation.w = q.w();
-
-    const Eigen::Vector3d velocity_lidar =
-        T.rotation().transpose() * result.v_world;
-    msg.twist.twist.linear.x = velocity_lidar.x();
-    msg.twist.twist.linear.y = velocity_lidar.y();
-    msg.twist.twist.linear.z = velocity_lidar.z();
-
+    std::lock_guard<std::mutex> lock(odometry_publish_mutex_);
     odom_pub_->publish(msg);
+    if (stamp_ns <= last_tf_stamp_ns_) {
+        return;
+    }
+    last_tf_stamp_ns_ = stamp_ns;
 
     geometry_msgs::msg::TransformStamped transform;
-    transform.header.stamp = stamp;
-    transform.header.frame_id = world_frame_;
-    transform.child_frame_id = lidar_frame_;
-    transform.transform.translation.x = T.translation().x();
-    transform.transform.translation.y = T.translation().y();
-    transform.transform.translation.z = T.translation().z();
+    transform.header = msg.header;
+    transform.child_frame_id = msg.child_frame_id;
+    transform.transform.translation.x = msg.pose.pose.position.x;
+    transform.transform.translation.y = msg.pose.pose.position.y;
+    transform.transform.translation.z = msg.pose.pose.position.z;
     transform.transform.rotation = msg.pose.pose.orientation;
     tf_broadcaster_->sendTransform(transform);
 }
@@ -399,24 +397,14 @@ void SapphireRos::publish_trajectory() {
 
     nav_msgs::msg::Path path;
     path.header.frame_id = world_frame_;
-    path.header.stamp = rclcpp::Time(static_cast<int64_t>(
-        std::llround(trajectory.samples.back().stamp * 1e9)));
+    path.header.stamp =
+        stamp_from_seconds(trajectory.samples.back().stamp);
     path.poses.reserve(trajectory.samples.size());
     for (const sapphire::MapTrajectorySample& sample : trajectory.samples) {
         geometry_msgs::msg::PoseStamped pose;
         pose.header.frame_id = world_frame_;
-        pose.header.stamp = rclcpp::Time(static_cast<int64_t>(
-            std::llround(sample.stamp * 1e9)));
-        const auto& T = sample.T_map_lidar;
-        pose.pose.position.x = T.translation().x();
-        pose.pose.position.y = T.translation().y();
-        pose.pose.position.z = T.translation().z();
-        Eigen::Quaterniond rotation(T.rotation());
-        rotation.normalize();
-        pose.pose.orientation.x = rotation.x();
-        pose.pose.orientation.y = rotation.y();
-        pose.pose.orientation.z = rotation.z();
-        pose.pose.orientation.w = rotation.w();
+        pose.header.stamp = stamp_from_seconds(sample.stamp);
+        pose.pose = to_ros_pose(sample.T_map_lidar * T_pose_lidar_);
         path.poses.push_back(std::move(pose));
     }
     trajectory_pub_->publish(path);
@@ -427,7 +415,8 @@ void SapphireRos::publish_trajectory() {
 
 void SapphireRos::publish_pgo_visualization() {
     publish_trajectory();
-    const rclcpp::Time stamp = this->now();
+    const auto stamp =
+        static_cast<builtin_interfaces::msg::Time>(this->now());
 
     if (pgo_graph_pub_->get_subscription_count() > 0) {
         pipeline_->requestPoseGraphSnapshot();
@@ -452,7 +441,7 @@ void SapphireRos::publish_pgo_visualization() {
             odometry_edges.points.reserve(
                 (snapshot.optimized_poses.size() - 1) * 2);
 
-            auto graphPoint = [](const sapphire::Isometry3d& pose) {
+            auto graph_point = [](const sapphire::Isometry3d& pose) {
                 geometry_msgs::msg::Point point;
                 point.x = pose.translation().x();
                 point.y = pose.translation().y();
@@ -461,9 +450,9 @@ void SapphireRos::publish_pgo_visualization() {
             };
             for (size_t i = 1; i < snapshot.optimized_poses.size(); ++i) {
                 odometry_edges.points.push_back(
-                    graphPoint(snapshot.optimized_poses[i - 1]));
+                    graph_point(snapshot.optimized_poses[i - 1]));
                 odometry_edges.points.push_back(
-                    graphPoint(snapshot.optimized_poses[i]));
+                    graph_point(snapshot.optimized_poses[i]));
             }
 
             visualization_msgs::msg::Marker loop_edges;
@@ -485,9 +474,9 @@ void SapphireRos::publish_pgo_visualization() {
                     continue;
                 }
                 loop_edges.points.push_back(
-                    graphPoint(snapshot.optimized_poses[edge.source]));
+                    graph_point(snapshot.optimized_poses[edge.source]));
                 loop_edges.points.push_back(
-                    graphPoint(snapshot.optimized_poses[edge.target]));
+                    graph_point(snapshot.optimized_poses[edge.target]));
             }
 
             visualization_msgs::msg::Marker nodes;
@@ -507,7 +496,7 @@ void SapphireRos::publish_pgo_visualization() {
             nodes.points.reserve(snapshot.optimized_poses.size());
             for (const sapphire::Isometry3d& pose :
                  snapshot.optimized_poses) {
-                nodes.points.push_back(graphPoint(pose));
+                nodes.points.push_back(graph_point(pose));
             }
 
             visualization_msgs::msg::MarkerArray graph;
@@ -523,12 +512,22 @@ void SapphireRos::publish_pgo_visualization() {
         const sapphire::PointCloudConstPtr map =
             pipeline_->latestPoseGraphMap();
         if (map && !map->empty()) {
-            sensor_msgs::msg::PointCloud2 message;
-            pcl::toROSMsg(*map, message);
-            message.header.stamp = stamp;
-            message.header.frame_id = world_frame_;
-            pgo_map_pub_->publish(message);
+            pgo_map_pub_->publish(
+                to_ros_point_cloud(*map, stamp, world_frame_));
         }
+    }
+}
+
+void SapphireRos::pgo_visualization_callback() {
+    try {
+        publish_pgo_visualization();
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            5000,
+            "[sapphire_ros2] PGO visualization failed: %s",
+            error.what());
     }
 }
 
@@ -538,14 +537,9 @@ void SapphireRos::publish_deskewed(double stamp) {
     auto cloud = pipeline_->latestDeskewed();
     if (!cloud || cloud->points.empty()) return;
 
-    sensor_msgs::msg::PointCloud2 ros_msg;
-    pcl::toROSMsg(*cloud, ros_msg);
-
-    ros_msg.header.stamp = rclcpp::Time(
-        static_cast<int64_t>(std::llround(stamp * 1e9)));
-    ros_msg.header.frame_id = world_frame_;
-
-    deskewed_pub_->publish(ros_msg);
+    deskewed_pub_->publish(
+        to_ros_point_cloud(
+            *cloud, stamp_from_seconds(stamp), world_frame_));
 }
 
 }  // namespace sapphire_ros2

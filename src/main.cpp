@@ -6,6 +6,7 @@
 #include <spdlog/spdlog.h>
 
 #include <cstdlib>
+#include <exception>
 #include <string>
 
 int main(int argc, char** argv) {
@@ -29,17 +30,36 @@ int main(int argc, char** argv) {
             spdlog::set_level(spdlog::level::critical);
         }
     }
-    auto node = std::make_shared<sapphire_ros2::SapphireRos>();
-    rclcpp::executors::MultiThreadedExecutor executor(
-        rclcpp::ExecutorOptions{}, 2);
-    executor.add_node(node);
     try {
-        executor.spin();
-    } catch (...) {
+        auto node = std::make_shared<sapphire_ros2::SapphireRos>();
+        rclcpp::executors::MultiThreadedExecutor executor(
+            rclcpp::ExecutorOptions{}, 2);
+        executor.add_node(node);
+        int exit_code = 0;
+        try {
+            executor.spin();
+        } catch (const std::exception& error) {
+            RCLCPP_ERROR(
+                node->get_logger(),
+                "[sapphire_ros2] executor failed: %s",
+                error.what());
+            exit_code = 1;
+        }
         node->saveTrajectory();
-        throw;
+        executor.remove_node(node);
+        node.reset();
+        if (rclcpp::ok()) {
+            rclcpp::shutdown();
+        }
+        return exit_code;
+    } catch (const std::exception& error) {
+        RCLCPP_FATAL(
+            rclcpp::get_logger("sapphire_ros"),
+            "[sapphire_ros2] fatal startup error: %s",
+            error.what());
+        if (rclcpp::ok()) {
+            rclcpp::shutdown();
+        }
+        return 1;
     }
-    node->saveTrajectory();
-    rclcpp::shutdown();
-    return 0;
 }

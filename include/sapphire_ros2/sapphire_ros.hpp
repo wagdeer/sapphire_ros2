@@ -1,16 +1,18 @@
 #pragma once
 
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <sensor_msgs/msg/imu.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <sapphire/odometry/pipeline.hpp>
 #include <sapphire/sensor/cloud_ingest.hpp>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -31,8 +33,10 @@ public:
 
 private:
     // ── Callbacks ─────────────────────────────────────────────────
-    void lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
-    void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg);
+    void lidar_callback(
+        const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+    void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr msg);
+    void pgo_visualization_callback();
 
     // ── Helpers ───────────────────────────────────────────────────
     void publish_odometry(const sapphire::OdometryResult& result);
@@ -66,11 +70,18 @@ private:
     std::string config_file_;
     std::string world_frame_ = "map";
     std::string lidar_frame_ = "lidar";
+    std::string imu_frame_ = "imu";
+    std::string pose_frame_ = "lidar";
+    double lidar_time_offset_s_ = 0.0;
+    double imu_time_offset_s_ = 0.0;
+    sapphire::Isometry3d T_pose_lidar_ = sapphire::Isometry3d::Identity();
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::unique_ptr<sapphire::OdometryPipeline> pipeline_;
     std::filesystem::path trajectory_output_path_;
     std::atomic<bool> trajectory_saved_{false};
     std::optional<double> last_lidar_result_stamp_;
+    std::mutex odometry_publish_mutex_;
+    int64_t last_tf_stamp_ns_ = 0;
     std::mutex trajectory_publish_mutex_;
     bool trajectory_published_ = false;
     size_t trajectory_samples_published_ = 0;

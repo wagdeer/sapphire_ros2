@@ -24,7 +24,7 @@ endif()
 
 # ── Dependencies ─────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
-find_package(ament_index_cpp REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -32,15 +32,9 @@ find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(tf2_eigen REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
-# C++-only projects do not define MPI::MPI_C. System PCL loads VTK, and
-# VTK::mpi names that target. The SLAM does not call MPI.
-enable_language(C)
-find_package(MPI REQUIRED COMPONENTS C)
-find_package(pcl_ros REQUIRED)
-find_package(PCL REQUIRED)
+find_package(spdlog REQUIRED)
 
 # Find sapphire core — add_subdirectory in colcon workspace, find_package otherwise
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/CMakeLists.txt")
@@ -51,22 +45,31 @@ else()
   message(STATUS "sapphire core found via find_package")
 endif()
 
-# Node
-add_executable(sapphire_ros_node
-    src/main.cpp
+# Adapter library
+add_library(sapphire_ros2_adapter
+    src/conversion.cpp
     src/sapphire_ros.cpp
 )
-target_include_directories(sapphire_ros_node PRIVATE
+target_include_directories(sapphire_ros2_adapter PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(sapphire_ros_node
-    sapphire
-    ${PCL_LIBRARIES}
+target_link_libraries(sapphire_ros2_adapter PUBLIC sapphire)
+ament_target_dependencies(sapphire_ros2_adapter
+    builtin_interfaces rclcpp sensor_msgs nav_msgs geometry_msgs
+    visualization_msgs tf2 tf2_ros
 )
-ament_target_dependencies(sapphire_ros_node
-    ament_index_cpp rclcpp sensor_msgs nav_msgs geometry_msgs
-    visualization_msgs tf2 tf2_ros tf2_eigen pcl_ros
+if(SAPPHIRE_ENABLE_LTO AND SAPPHIRE_ROS2_IPO_SUPPORTED)
+  set_property(TARGET sapphire_ros2_adapter
+    PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
+
+add_executable(sapphire_ros_node src/main.cpp)
+target_link_libraries(
+  sapphire_ros_node
+  sapphire_ros2_adapter
+  spdlog::spdlog
 )
+ament_target_dependencies(sapphire_ros_node rclcpp)
 if(SAPPHIRE_ENABLE_LTO AND SAPPHIRE_ROS2_IPO_SUPPORTED)
   set_property(TARGET sapphire_ros_node
     PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
@@ -74,16 +77,25 @@ endif()
 
 # Install
 install(TARGETS sapphire_ros_node DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS scripts/odom_metrics.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME odom_metrics)
+install(
+  TARGETS sapphire_ros2_adapter
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/cfg")
-  install(
-      DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../sapphire/cfg/
-      DESTINATION share/${PROJECT_NAME}/cfg
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(sapphire_ros2_conversion_test
+    test/conversion_test.cpp
   )
+  if(TARGET sapphire_ros2_conversion_test)
+    target_link_libraries(
+      sapphire_ros2_conversion_test
+      sapphire_ros2_adapter
+    )
+  endif()
 endif()
 
 ament_package()

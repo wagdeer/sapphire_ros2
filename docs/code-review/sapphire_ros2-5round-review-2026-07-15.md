@@ -1,4 +1,9 @@
 ┌─ Sapphire ROS2 ── 5-Round Clean Code Review ──────────────────────┐
+
+> Historical review retained for provenance. Current behavior is defined by
+> `docs/INTERFACE_CONTRACT.md`; verify implementation details against the
+> current source and tests.
+
 │  ◆ DATE      :: 2026-07-15                                        │
 │  ◆ SCOPE     :: sapphire_ros2 (ROS2 wrapper package, 6 files)    │
 │  ◆ BASELINE  :: nav2, slam_toolbox, leggedrobotics/ros_best_     │
