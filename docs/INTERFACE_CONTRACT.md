@@ -28,6 +28,10 @@ When `pose_frame=imu`, `T_pose_lidar` is the inverse of the configured
 
 ## Topics
 
+The node subscribes to the relative names `lidar/points` and `imu/data`, and
+publishes the relative names below. The launch file remaps them. The names in
+this table are the launch defaults.
+
 | Direction | Topic | Type |
 |---|---|---|
 | Input | `/front_lidar` | `sensor_msgs/PointCloud2` |
@@ -38,7 +42,10 @@ When `pose_frame=imu`, `T_pose_lidar` is the inverse of the configured
 | Output | `/sapphire/pgo/map` | `sensor_msgs/PointCloud2` |
 | Output | `/sapphire/pgo/graph` | `visualization_msgs/MarkerArray` |
 
-Every external topic is configurable in launch.
+Every external topic can be changed from the launch file. `/sapphire/trajectory`,
+`/sapphire/pgo/map`, and `/sapphire/pgo/graph` are created only when the loaded
+profile sets `pgo.enabled` to true. Odometry and the deskewed cloud are always
+advertised.
 
 ## Delivery semantics
 
