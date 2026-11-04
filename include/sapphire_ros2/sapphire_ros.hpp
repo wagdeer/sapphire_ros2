@@ -29,7 +29,10 @@ public:
     ~SapphireRos() override;
 
     /// Write the map trajectory in TUM format. Safe to call more than once.
-    void saveTrajectory();
+    /// Returns false only when a configured write fails. An empty path, a
+    /// missing pipeline, and an empty trajectory are successful. A repeated
+    /// call returns true; the first call reports the I/O result.
+    bool saveTrajectory();
 
 private:
     // ── Callbacks ─────────────────────────────────────────────────

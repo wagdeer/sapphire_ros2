@@ -45,7 +45,9 @@ int main(int argc, char** argv) {
                 error.what());
             exit_code = 1;
         }
-        node->saveTrajectory();
+        if (!node->saveTrajectory()) {
+            exit_code = 1;
+        }
         executor.remove_node(node);
         node.reset();
         if (rclcpp::ok()) {
