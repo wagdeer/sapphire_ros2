@@ -53,7 +53,7 @@ add_library(sapphire_ros2_adapter
 target_include_directories(sapphire_ros2_adapter PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(sapphire_ros2_adapter PUBLIC sapphire)
+target_link_libraries(sapphire_ros2_adapter sapphire)
 ament_target_dependencies(sapphire_ros2_adapter
     builtin_interfaces rclcpp sensor_msgs nav_msgs geometry_msgs
     visualization_msgs tf2 tf2_ros
