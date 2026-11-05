@@ -64,12 +64,7 @@ private:
     rclcpp::CallbackGroup::SharedPtr imu_cb_group_;
 
     // ── Core ─────────────────────────────────────────────────────
-    sapphire::sensor::IngestConfig lidar_ingest_;
-    bool require_point_time_ = false;
-    bool lidar_time_locked_ = false;
-    double locked_lidar_span_s_ = 0.0;
-    bool warned_lidar_span_ratio_ = false;
-    bool warned_lidar_header_mismatch_ = false;
+    sapphire::sensor::LidarTimeSession lidar_time_;
     std::string config_file_;
     std::string world_frame_ = "map";
     std::string lidar_frame_ = "lidar";
