@@ -60,11 +60,18 @@ ROS 1 uses queue sizes and latching. ROS 2 maps them to QoS:
 | Trajectory | queue 1, latched | RELIABLE, TRANSIENT_LOCAL, KEEP_LAST 1 |
 | PGO map/graph | queue 1, latched | RELIABLE, TRANSIENT_LOCAL, KEEP_LAST 1 |
 
-LiDAR and IMU must use separate processing lanes so LiDAR can wait for
-scan-end IMU coverage without blocking the IMU callback.
+LiDAR and IMU must use separate processing lanes. After the first scan,
+`pushLidar` waits at most `OdometryPipeline::kImuCoverageWait` of wall time
+for IMU coverage of the scan end and drops that scan if the IMU does not
+arrive. The wait must not block the IMU callback.
 
 ## Shutdown and artifacts
 
-The final TUM trajectory is written once on normal spin exit. Writes are
-idempotent. A malformed input frame is logged and dropped; startup/configuration
-errors remain fatal.
+The final TUM trajectory is written once on normal spin exit. The file is
+the pose-graph map trajectory, so it has poses only when `pgo.enabled` is
+true. A non-empty `output.trajectory_dir` with `pgo.enabled = false` is
+rejected when the profile loads. `trajectory_output` replaces that path
+after loading and does not enable PGO; with PGO disabled the save finds an
+empty map trajectory and creates no file. Writes are idempotent. A
+malformed input frame is logged and dropped; startup/configuration errors
+remain fatal.

@@ -89,8 +89,8 @@ SapphireRos::SapphireRos()
     auto lidar_qos = rclcpp::SensorDataQoS();
     lidar_qos.keep_last(1);
     auto imu_qos = rclcpp::SensorDataQoS();
-    // Cover the core's 500 ms scan-end IMU wait without forcing LiDAR
-    // callbacks to retain stale point clouds.
+    // Cover kImuCoverageWait of IMU without forcing LiDAR callbacks to
+    // retain stale point clouds.
     imu_qos.keep_last(100);
     auto deskewed_qos = rclcpp::SensorDataQoS();
     deskewed_qos.keep_last(1);
@@ -122,8 +122,9 @@ SapphireRos::SapphireRos()
             lidar_cb_group_);
     }
 
-    // Match DLIO's execution model: LiDAR may wait for scan-end IMU data,
-    // therefore IMU callbacks must be able to run concurrently.
+    // Match DLIO: pushLidar waits up to sapphire::OdometryPipeline::kImuCoverageWait
+    // for scan-end IMU and releases the IMU mutex while waiting. The IMU
+    // callback must run on another thread; otherwise the scan is dropped.
     rclcpp::SubscriptionOptions lidar_options;
     lidar_options.callback_group = lidar_cb_group_;
     lidar_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
