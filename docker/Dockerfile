@@ -69,5 +69,11 @@ RUN set -eux; \
     && cmake --install /tmp/tomlplusplus/build \
     && rm -rf /tmp/tomlplusplus
 
+# GTSAM 4.3's exported target names libmetis.so, but the PPA package does not
+# pull in the development symlink package transitively.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libmetis-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 CMD ["bash"]
