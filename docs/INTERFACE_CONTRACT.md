@@ -1,38 +1,25 @@
-# Sapphire ROS Interface Contract
+# Interface
 
-The ROS 1 and ROS 2 wrappers expose the same behavior. ROS-specific
-mechanisms differ, but parameters, frame semantics, timestamp rules, and
-artifact outputs do not.
+`sapphire_ros1` and `sapphire_ros2` take the same parameters and publish the same topics. Queue settings differ because ROS 1 has no QoS.
 
 ## Parameters
 
-| Parameter | Type | Default | Meaning |
-|---|---|---|---|
-| `config_file` | string | required | Absolute path to a core-owned algorithm TOML |
-| `world_frame` | string | `map` | Parent frame for poses and map-frame clouds |
-| `lidar_frame` | string | `lidar` | LiDAR frame name |
-| `imu_frame` | string | `imu` | IMU frame name |
-| `pose_frame` | string | `lidar` | `lidar` or `imu`; applies to odometry, TF, path, and TUM |
-| `lidar_time_offset` | double | `0.0` | Added to the scan header and every point timestamp |
-| `imu_time_offset` | double | `0.0` | Added to every IMU timestamp |
-| `trajectory_output` | string | empty | TUM path override; empty uses the TOML value |
+| Parameter | Default | Meaning |
+|---|---|---|
+| `config_file` | required | Absolute path to a TOML profile in the core `cfg/` directory |
+| `world_frame` | `map` | Parent frame for poses and map-frame clouds |
+| `lidar_frame` | `lidar` | LiDAR frame name |
+| `imu_frame` | `imu` | IMU frame name |
+| `pose_frame` | `lidar` | `lidar` or `imu`. Odometry, TF, the path, and the TUM file all use this frame |
+| `lidar_time_offset` | `0.0` | Seconds added to the scan header and to every point time |
+| `imu_time_offset` | `0.0` | Seconds added to every IMU stamp |
+| `trajectory_output` | empty | TUM path. Empty uses `output.trajectory_dir` from the profile |
 
-For output poses:
-
-```text
-T_world_pose = T_world_lidar * T_pose_lidar
-```
-
-When `pose_frame=imu`, `T_pose_lidar` is the inverse of the configured
-`T_imu_lidar`. Odometry, TF, path, and TUM output must all use the same result.
+Launch arguments override the topic names. The node itself subscribes to `lidar/points` and `imu/data`, and the launch file remaps those names.
 
 ## Topics
 
-The node subscribes to the relative names `lidar/points` and `imu/data`, and
-publishes the relative names below. The launch file remaps them. The names in
-this table are the launch defaults.
-
-| Direction | Topic | Type |
+| Direction | Default name | Type |
 |---|---|---|
 | Input | `/front_lidar` | `sensor_msgs/PointCloud2` |
 | Input | `/front_lidar/imu` | `sensor_msgs/Imu` |
@@ -42,36 +29,23 @@ this table are the launch defaults.
 | Output | `/sapphire/pgo/map` | `sensor_msgs/PointCloud2` |
 | Output | `/sapphire/pgo/graph` | `visualization_msgs/MarkerArray` |
 
-Every external topic can be changed from the launch file. `/sapphire/trajectory`,
-`/sapphire/pgo/map`, and `/sapphire/pgo/graph` are created only when the loaded
-profile sets `pgo.enabled` to true. Odometry and the deskewed cloud are always
-advertised.
+Odometry and the deskewed cloud are always advertised. The trajectory, PGO map, and PGO graph exist only when the profile sets `pgo.enabled` to true.
 
-## Delivery semantics
-
-ROS 1 uses queue sizes and latching. ROS 2 maps them to QoS:
+## Queues
 
 | Stream | ROS 1 | ROS 2 |
 |---|---|---|
-| LiDAR | queue 1 | BEST_EFFORT, KEEP_LAST 1 |
-| IMU | queue 100 | BEST_EFFORT, KEEP_LAST 100 |
-| Odometry | queue 10 | RELIABLE, KEEP_LAST 10 |
-| Deskewed cloud | queue 1 | BEST_EFFORT, KEEP_LAST 1 |
-| Trajectory | queue 1, latched | RELIABLE, TRANSIENT_LOCAL, KEEP_LAST 1 |
-| PGO map/graph | queue 1, latched | RELIABLE, TRANSIENT_LOCAL, KEEP_LAST 1 |
+| LiDAR | queue 1 | best effort, keep last 1 |
+| IMU | queue 100 | best effort, keep last 100 |
+| Odometry | queue 10 | reliable, keep last 10 |
+| Deskewed cloud | queue 1 | best effort, keep last 1 |
+| Trajectory | queue 1, latched | reliable, transient local, keep last 1 |
+| PGO map and graph | queue 1, latched | reliable, transient local, keep last 1 |
 
-LiDAR and IMU must use separate processing lanes. After the first scan,
-`pushLidar` waits at most `OdometryPipeline::kImuCoverageWait` of wall time
-for IMU coverage of the scan end and drops that scan if the IMU does not
-arrive. The wait must not block the IMU callback.
+LiDAR and IMU are processed on separate threads. A scan is dropped when IMU samples covering the end of that scan do not arrive in time.
 
-## Shutdown and artifacts
+## Trajectory file
 
-The final TUM trajectory is written once on normal spin exit. The file is
-the pose-graph map trajectory, so it has poses only when `pgo.enabled` is
-true. A non-empty `output.trajectory_dir` with `pgo.enabled = false` is
-rejected when the profile loads. `trajectory_output` replaces that path
-after loading and does not enable PGO; with PGO disabled the save finds an
-empty map trajectory and creates no file. Writes are idempotent. A
-malformed input frame is logged and dropped; startup/configuration errors
-remain fatal.
+The TUM file is the pose-graph trajectory. It is written once, when the node shuts down normally. A profile that sets `output.trajectory_dir` while `pgo.enabled` is false is rejected at load. `trajectory_output` only changes the path. With PGO disabled, shutdown creates no file.
+
+A malformed cloud or IMU message is logged and dropped. A bad `config_file` or an unknown parameter value stops the node at startup.
