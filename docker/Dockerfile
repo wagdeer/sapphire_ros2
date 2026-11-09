@@ -27,8 +27,18 @@ RUN apt-get update \
         ros-humble-tf2-ros \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch v1.0.1 \
-        https://github.com/koide3/small_gicp.git /tmp/small_gicp \
+RUN set -eux; \
+    for attempt in 1 2 3 4 5; do \
+        rm -rf /tmp/small_gicp; \
+        if git clone --depth 1 --branch v1.0.1 \
+            https://github.com/koide3/small_gicp.git /tmp/small_gicp; then \
+            break; \
+        fi; \
+        if [ "${attempt}" -eq 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 5))"; \
+    done; \
+    test "$(git -C /tmp/small_gicp rev-parse HEAD)" = \
+        "57c1106daf83c2c79ee0c58a9c7ed0032298ff4e" \
     && cmake -S /tmp/small_gicp -B /tmp/small_gicp/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \
@@ -38,6 +48,26 @@ RUN git clone --depth 1 --branch v1.0.1 \
     && cmake --build /tmp/small_gicp/build --parallel "$(nproc)" \
     && cmake --install /tmp/small_gicp/build \
     && rm -rf /tmp/small_gicp
+
+RUN set -eux; \
+    for attempt in 1 2 3 4 5; do \
+        rm -rf /tmp/tomlplusplus; \
+        if git clone --depth 1 --branch v3.4.0 \
+            https://github.com/marzer/tomlplusplus.git /tmp/tomlplusplus; then \
+            break; \
+        fi; \
+        if [ "${attempt}" -eq 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 5))"; \
+    done; \
+    test "$(git -C /tmp/tomlplusplus rev-parse HEAD)" = \
+        "30172438cee64926dc41fdd9c11fb3ba5b2ba9de" \
+    && cmake -S /tmp/tomlplusplus -B /tmp/tomlplusplus/build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DTOMLPLUSPLUS_BUILD_TESTS=OFF \
+        -DTOMLPLUSPLUS_BUILD_EXAMPLES=OFF \
+    && cmake --build /tmp/tomlplusplus/build --parallel "$(nproc)" \
+    && cmake --install /tmp/tomlplusplus/build \
+    && rm -rf /tmp/tomlplusplus
 
 WORKDIR /workspace
 CMD ["bash"]
