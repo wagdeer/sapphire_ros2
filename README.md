@@ -38,7 +38,7 @@ source install/setup.bash
 | PCL | 1.12 or newer | `libpcl-dev` |
 | OpenMP | | `libomp-dev` |
 | spdlog | | `libspdlog-dev` |
-| GTSAM | 4.2 | `ppa:borglab/gtsam-release-4.2` |
+| GTSAM | 4.3 | `ppa:borglab/gtsam-release-4.3` |
 | small_gicp | 1.0.1 | see below |
 
 toml++ 3.4 is downloaded by CMake when it is not already installed. Message and TF packages are listed in `package.xml`.
@@ -46,7 +46,7 @@ toml++ 3.4 is downloaded by CMake when it is not already installed. Message and 
 ```bash
 sudo apt install build-essential cmake git software-properties-common \
   libeigen3-dev libpcl-dev libomp-dev libspdlog-dev
-sudo add-apt-repository -y ppa:borglab/gtsam-release-4.2
+sudo add-apt-repository -y ppa:borglab/gtsam-release-4.3
 sudo apt install -y libgtsam-dev
 ```
 
