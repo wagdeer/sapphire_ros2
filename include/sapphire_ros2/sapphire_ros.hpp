@@ -1,89 +1,87 @@
 #pragma once
 
-#include <rclcpp/rclcpp.hpp>
-#include <nav_msgs/msg/odometry.hpp>
-#include <nav_msgs/msg/path.hpp>
-#include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/transform_broadcaster.h>
-#include <visualization_msgs/msg/marker_array.hpp>
 
-#include <sapphire/odometry/pipeline.hpp>
-#include <sapphire/sensor/cloud_ingest.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <optional>
+#include <rclcpp/rclcpp.hpp>
+#include <sapphire/odometry/pipeline.hpp>
+#include <sapphire/sensor/cloud_ingest.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <string>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace sapphire_ros2 {
 
 /// Sapphire ROS2 wrapper — LiDAR + IMU → odometry
 /// Handles ROS data I/O + message conversion. Core algorithms in sapphire::OdometryPipeline.
 class SapphireRos : public rclcpp::Node {
-public:
-    SapphireRos();
-    ~SapphireRos() override;
+ public:
+  SapphireRos();
+  ~SapphireRos() override;
 
-    /// Write the map trajectory in TUM format. Safe to call more than once.
-    /// Returns false only when a configured write fails. An empty path, a
-    /// missing pipeline, and an empty trajectory are successful. A repeated
-    /// call returns true; the first call reports the I/O result.
-    bool saveTrajectory();
+  /// Write the map trajectory in TUM format. Safe to call more than once.
+  /// Returns false only when a configured write fails. An empty path, a
+  /// missing pipeline, and an empty trajectory are successful. A repeated
+  /// call returns true; the first call reports the I/O result.
+  bool saveTrajectory();
 
-private:
-    // ── Callbacks ─────────────────────────────────────────────────
-    void lidar_callback(
-        const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
-    void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr msg);
-    void pgo_visualization_callback();
+ private:
+  // ── Callbacks ─────────────────────────────────────────────────
+  void lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+  void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr msg);
+  void pgo_visualization_callback();
 
-    // ── Helpers ───────────────────────────────────────────────────
-    void publish_odometry(const sapphire::OdometryResult& result);
-    void publish_deskewed(double stamp);
-    void publish_pgo_visualization();
-    /// Replace the whole lidar-rate path with the latest per-keyframe replay.
-    void publish_trajectory();
+  // ── Helpers ───────────────────────────────────────────────────
+  void publish_odometry(const sapphire::OdometryResult& result);
+  void publish_deskewed(double stamp);
+  void publish_pgo_visualization();
+  /// Replace the whole lidar-rate path with the latest per-keyframe replay.
+  void publish_trajectory();
 
-    // ── Publishers ───────────────────────────────────────────────
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectory_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskewed_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pgo_map_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
-        pgo_graph_pub_;
-    rclcpp::TimerBase::SharedPtr pgo_visualization_timer_;
+  // ── Publishers ───────────────────────────────────────────────
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectory_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr deskewed_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pgo_map_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pgo_graph_pub_;
+  rclcpp::TimerBase::SharedPtr pgo_visualization_timer_;
 
-    // ── Subscriptions ────────────────────────────────────────────
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
-    rclcpp::CallbackGroup::SharedPtr lidar_cb_group_;
-    rclcpp::CallbackGroup::SharedPtr imu_cb_group_;
+  // ── Subscriptions ────────────────────────────────────────────
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  rclcpp::CallbackGroup::SharedPtr lidar_cb_group_;
+  rclcpp::CallbackGroup::SharedPtr imu_cb_group_;
 
-    // ── Core ─────────────────────────────────────────────────────
-    sapphire::sensor::LidarTimeSession lidar_time_;
-    std::string config_file_;
-    std::string world_frame_ = "map";
-    std::string lidar_frame_ = "lidar";
-    std::string imu_frame_ = "imu";
-    std::string pose_frame_ = "lidar";
-    double lidar_time_offset_s_ = 0.0;
-    double imu_time_offset_s_ = 0.0;
-    sapphire::Isometry3d T_pose_lidar_ = sapphire::Isometry3d::Identity();
-    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::unique_ptr<sapphire::OdometryPipeline> pipeline_;
-    std::filesystem::path trajectory_output_path_;
-    std::atomic<bool> trajectory_saved_{false};
-    std::optional<double> last_lidar_result_stamp_;
-    std::mutex odometry_publish_mutex_;
-    int64_t last_tf_stamp_ns_ = 0;
-    std::mutex trajectory_publish_mutex_;
-    bool trajectory_published_ = false;
-    size_t trajectory_samples_published_ = 0;
-    size_t trajectory_revision_published_ = 0;
+  // ── Core ─────────────────────────────────────────────────────
+  sapphire::sensor::LidarTimeSession lidar_time_;
+  std::string config_file_;
+  std::string world_frame_ = "map";
+  std::string lidar_frame_ = "lidar";
+  std::string imu_frame_ = "imu";
+  std::string pose_frame_ = "lidar";
+  double lidar_time_offset_s_ = 0.0;
+  double imu_time_offset_s_ = 0.0;
+  sapphire::Isometry3d T_pose_lidar_ = sapphire::Isometry3d::Identity();
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  std::unique_ptr<sapphire::OdometryPipeline> pipeline_;
+  std::filesystem::path trajectory_output_path_;
+  std::atomic<bool> trajectory_saved_{false};
+  std::optional<double> last_lidar_result_stamp_;
+  std::mutex odometry_publish_mutex_;
+  int64_t last_tf_stamp_ns_ = 0;
+  std::mutex trajectory_publish_mutex_;
+  bool trajectory_published_ = false;
+  size_t trajectory_samples_published_ = 0;
+  size_t trajectory_revision_published_ = 0;
 };
 
 }  // namespace sapphire_ros2
